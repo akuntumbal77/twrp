@@ -315,6 +315,9 @@ jobs:
 
       - name: Check if assemble_vintf blocks recoveryimage target
         working-directory: twrp
+        env:
+          KBUILD_BUILD_USER: "RahmatSobrian"
+          KBUILD_BUILD_HOST: "YoruProject"
         run: |
           # Cek dulu apakah assemble_vintf benar-benar dependency WAJIB untuk
           # target 'recoveryimage', atau cuma ke-trigger karena ninja build
@@ -323,11 +326,6 @@ jobs:
           # bukan komponen boot recovery).
           echo "Mencari referensi assemble_vintf di makefile recovery target..."
           grep -rn "assemble_vintf" build/make/core/*.mk 2>/dev/null | grep -i recovery || echo "Tidak ada referensi langsung assemble_vintf -> recoveryimage di core makefile"
-        working-directory: twrp
-        env:
-          KBUILD_BUILD_USER: "RahmatSobrian"
-          KBUILD_BUILD_HOST: "ReLIFE"
-        run: |
           mkdir -p logs
           export ALLOW_MISSING_DEPENDENCIES=true
           export BUILD_BROKEN_MISSING_REQUIRED_MODULES=true

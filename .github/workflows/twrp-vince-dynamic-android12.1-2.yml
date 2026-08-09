@@ -57,7 +57,6 @@ jobs:
             make python3 bc flex bison gperf gawk \
             libxml2-utils xsltproc libssl-dev \
             build-essential ccache 2>&1 | tee -a /tmp/full_build.log
-          # Bersihkan apt cache setelah install, lumayan buat disk
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/*
 
@@ -106,44 +105,27 @@ jobs:
 
           rm -rf .repo
           df -h | tee -a /tmp/full_build.log
-          
-      - name: Patch libvintf Android.bp
+
+      - name: Patch libvintf Android.bp (hapus dependency libvts_vintf_test_common)
         run: |
+          cd twrp
           set -e
           BP="system/libvintf/Android.bp"
 
           if [ ! -f "$BP" ]; then
-            echo "⚠️ $BP tidak ditemukan, skip patch"
+            echo "⚠️ $BP tidak ditemukan, skip patch" | tee -a /tmp/full_build.log
           else
-            echo "== Sebelum patch =="
-            grep -n "assemble_vintf\|test_suites\|libvts_vintf_test_common" "$BP" || true
+            echo "== Sebelum patch ==" | tee -a /tmp/full_build.log
+            grep -n "libvts_vintf_test_common" "$BP" | tee -a /tmp/full_build.log || echo "(tidak ada referensi ditemukan)" | tee -a /tmp/full_build.log
 
-            python3 - "$BP" << 'PYEOF'
-          import re, sys
+            # Hapus SETIAP baris yang menyebut libvts_vintf_test_common (baik di
+            # test_suites, required, atau data_libs) - ini penyebab error
+            # "module assemble_vintf missing dependencies: libvts_vintf_test_common"
+            # karena repo test/vts nggak ikut ke-sync di minimal manifest.
+            sed -i '/libvts_vintf_test_common/d' "$BP"
 
-          path = sys.argv[1]
-          with open(path) as f:
-              content = f.read()
-
-          pattern = re.compile(r'(cc_binary_host\s*\{[^}]*name:\s*"assemble_vintf"[^}]*\})', re.DOTALL)
-
-          def strip_test_suites(match):
-              block = match.group(1)
-              block = re.sub(r'test_suites:\s*\[[^\]]*\],?\n?', '', block)
-              return block
-
-          new_content, n = pattern.subn(strip_test_suites, content)
-
-          if n == 0:
-              print("⚠️ Blok assemble_vintf tidak ketemu, cek manual formatnya")
-          else:
-              with open(path, 'w') as f:
-                  f.write(new_content)
-              print(f"✅ test_suites dihapus dari {n} blok assemble_vintf")
-          PYEOF
-
-            echo "== Sesudah patch =="
-            grep -n "assemble_vintf\|test_suites\|libvts_vintf_test_common" "$BP" || echo "(bersih)"
+            echo "== Sesudah patch ==" | tee -a /tmp/full_build.log
+            grep -n "libvts_vintf_test_common" "$BP" | tee -a /tmp/full_build.log || echo "(bersih - tidak ada lagi referensi libvts_vintf_test_common)" | tee -a /tmp/full_build.log
           fi
 
       - name: Check Disk Space (after repo sync)
@@ -158,34 +140,17 @@ jobs:
             device/xiaomi/vince \
             2>&1 | tee -a /tmp/full_build.log
 
-      # =====================================================================
-      # PENTING: Nilai BOARD_SUPER_PARTITION_SIZE di bawah ini PLACEHOLDER.
-      # Wajib disesuaikan dengan ukuran "super" milik ROM kamu:
-      #   1. Buka device tree ROM: github.com/Project-Nightcord/android_device_xiaomi_vince
-      #      branch lineage-22.2 -> file BoardConfig.mk
-      #   2. Cari baris BOARD_SUPER_PARTITION_SIZE dan BOARD_SUPER_PARTITION_GROUPS
-      #      lalu salin nilainya persis ke sini (ganti angka di bawah).
-      #   3. Kalau ROM kamu juga punya partisi system_ext/product terpisah,
-      #      pastikan namanya cocok dengan BOARD_..._PARTITION_LIST di bawah.
-      # =====================================================================
       - name: Patch Device Tree for Dynamic Partition (Super) Support
         run: |
           cd twrp/device/xiaomi/vince
           set -e
 
           echo "== Patch BoardConfig.mk =="
-          # Hapus baris size statis system/vendor lama (sudah tidak relevan, jadi logical di super)
-          # BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE dihapus di sini supaya tidak dobel -
-          # nanti ditambahkan lagi di blok dynamic partition di bawah.
           sed -i '/BOARD_SYSTEMIMAGE_PARTITION_SIZE/d;/BOARD_VENDORIMAGE_PARTITION_SIZE/d;/BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE/d' BoardConfig.mk
 
           cat >> BoardConfig.mk << 'EOF'
 
           # ==== Dynamic Partitions (retrofit super) - vince/mi8953 ====
-          # Nilai di bawah disalin persis dari BoardConfig.mk device tree ROM
-          # (Project-Nightcord/android_device_xiaomi_vince, branch lineage-22.2).
-          # Device ini TIDAK punya partisi fisik "super" tersendiri - metadata
-          # dynamic partition menumpang di partisi fisik lama "cust" dan "system".
           BOARD_SUPER_PARTITION_BLOCK_DEVICES := cust system
           BOARD_SUPER_PARTITION_METADATA_DEVICE := system
           BOARD_SUPER_PARTITION_CUST_DEVICE_SIZE := 536870912
@@ -201,31 +166,16 @@ jobs:
           TARGET_COPY_OUT_VENDOR := vendor
           TARGET_COPY_OUT_ODM := odm
 
-          # WAJIB: build system minta filesystem type tiap partisi didefinisikan,
-          # meskipun runtime-nya jadi logical partition di dalam super.
-          # (Ini yang kelupaan di percobaan pertama - bikin build gagal dengan error
-          # "either BOARD_PREBUILT_PRODUCTIMAGE or BOARD_PRODUCTIMAGE_FILE_SYSTEM_TYPE must be set")
           BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
           BOARD_PRODUCTIMAGE_FILE_SYSTEM_TYPE := ext4
           BOARD_SYSTEM_EXTIMAGE_FILE_SYSTEM_TYPE := ext4
           BOARD_ODMIMAGE_FILE_SYSTEM_TYPE := ext4
 
-          # TWRP: aktifkan dukungan mount partisi logical
           TW_INCLUDE_LOGICAL := true
           EOF
 
-          # CATATAN: device ini RETROFIT dynamic partition (tidak ada partisi fisik
-          # "super" tersendiri - metadata numpang di partisi fisik "cust" & "system",
-          # lihat BOARD_SUPER_PARTITION_BLOCK_DEVICES di atas). fs_mgr menemukan
-          # kedua block device itu otomatis lewat metadata, TIDAK perlu entry /super
-          # terpisah di fstab. Entry di bawah ini best-effort berdasarkan
-          # BOARD_MI8953_DYNPART_PARTITION_LIST (product system system_ext odm vendor).
-          # Kalau kamu punya file rootdir/etc/fstab.qcom dari device tree ROM,
-          # kirimkan supaya ini bisa disesuaikan 1:1 dengan punya ROM.
-
-          echo "== Patch twrp.fstab (root/system/etc/twrp.fstab) =="
+          echo "== Patch twrp.fstab =="
           FSTAB=recovery/root/system/etc/twrp.fstab
-          # Hapus baris system/system_image/vendor/vendor_image lama
           sed -i '/^\/system /d;/^\/system_image /d;/^\/vendor /d;/^\/vendor_image /d' "$FSTAB"
 
           cat >> "$FSTAB" << 'EOF'
@@ -236,13 +186,10 @@ jobs:
           /odm             ext4   /dev/block/mapper/odm                                   flags=logical;display="Odm";backup=1;flashimg=1
           EOF
 
-          echo "== Patch recovery.fstab (root/system/etc/recovery.fstab) =="
+          echo "== Patch recovery.fstab =="
           RFSTAB=recovery/root/system/etc/recovery.fstab
-          # Hapus baris mount system/cust(vendor) lama yang bersifat statis
           sed -i '/\/by-name\/system\s\+\/system/d;/\/by-name\/cust\s\+\/vendor/d' "$RFSTAB"
 
-          # Entri di bawah disalin persis dari rootdir/etc/fstab.qcom ROM
-          # (Project-Nightcord/android_device_xiaomi_vince, lineage-22.2)
           cat >> "$RFSTAB" << 'EOF'
           system				/system			ext4	ro								wait,logical,first_stage_mount
           system				/system			erofs	ro								wait,logical,first_stage_mount
@@ -266,28 +213,19 @@ jobs:
       - name: Increase Kernel/Recovery Log Verbosity (for debugging)
         run: |
           cd twrp/device/xiaomi/vince
-          # Naikkan verbosity dmesg kernel supaya error mount dynamic partition
-          # (liblp/fs_mgr) kelihatan jelas lewat `adb shell dmesg` saat di recovery.
-          # Ini cuma nambah opsi di cmdline (dibakar ke header boot image saat
-          # mkbootimg), TIDAK perlu rebuild kernel.
           sed -i 's/^BOARD_KERNEL_CMDLINE := /BOARD_KERNEL_CMDLINE := printk.devkmsg=on loglevel=8 /' BoardConfig.mk
           grep "^BOARD_KERNEL_CMDLINE" BoardConfig.mk
-
-          # Pastikan logcat & logd aktif (dibutuhkan supaya `adb shell logcat`
-          # bisa dipakai buat lihat error mount/init dari recovery)
           grep -q "^TWRP_INCLUDE_LOGCAT" BoardConfig.mk || echo "TWRP_INCLUDE_LOGCAT := true" >> BoardConfig.mk
           grep -q "^TARGET_USES_LOGD" BoardConfig.mk || echo "TARGET_USES_LOGD := true" >> BoardConfig.mk
 
       - name: Extra Cleanup Before Build
         run: |
           cd twrp
-          # Buang project yang nggak perlu buat recovery-only image (bukan full ROM)
           rm -rf prebuilts/qemu-kernel 2>/dev/null || true
           rm -rf prebuilts/android-emulator 2>/dev/null || true
           rm -rf test 2>/dev/null || true
           rm -rf cts 2>/dev/null || true
           rm -rf pdk 2>/dev/null || true
-          # Bersihkan sisa apt & docker & tmp yang mungkin masih numpuk
           sudo apt-get clean 2>/dev/null || true
           docker system prune -af 2>/dev/null || true
           df -h
@@ -322,10 +260,6 @@ jobs:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: |
-          # Log df -h tiap 2 menit ke file terpisah, supaya kalau build mati
-          # karena disk penuh, kita tau PERSIS di menit keberapa & secepat apa
-          # disk terisi -- bukan cuma "abis di akhir". Kalau usage sudah >85%,
-          # kirim notif Telegram (cuma sekali, biar nggak spam).
           (
             ALERTED=false
             while true; do
@@ -352,19 +286,12 @@ jobs:
           ) &
           echo "DISK_MONITOR_PID=$!" >> $GITHUB_ENV
 
-      - name: Check if assemble_vintf blocks recoveryimage target
+      - name: Build Recovery Image
         working-directory: twrp
         env:
           KBUILD_BUILD_USER: "RahmatSobrian"
           KBUILD_BUILD_HOST: "YoruProject"
         run: |
-          # Cek dulu apakah assemble_vintf benar-benar dependency WAJIB untuk
-          # target 'recoveryimage', atau cuma ke-trigger karena ninja build
-          # banyak target sekaligus. TWRP recovery.img secara historis TIDAK
-          # butuh VINTF assembly (itu fitur Treble/GSI compliance check,
-          # bukan komponen boot recovery).
-          echo "Mencari referensi assemble_vintf di makefile recovery target..."
-          grep -rn "assemble_vintf" build/make/core/*.mk 2>/dev/null | grep -i recovery || echo "Tidak ada referensi langsung assemble_vintf -> recoveryimage di core makefile"
           mkdir -p logs
           export ALLOW_MISSING_DEPENDENCIES=true
           export BUILD_BROKEN_MISSING_REQUIRED_MODULES=true
@@ -422,13 +349,9 @@ jobs:
         run: |
           mkdir -p debug-info
           OUT=out/target/product/vince/recovery/root/system/etc
-          # File FINAL yang beneran masuk ramdisk recovery, buat dibandingkan
-          # sama file yang kita patch manual - kalau beda, artinya ada step
-          # build system yang overwrite/generate ulang.
-          cp -v "$OUT/twrp.fstab" debug-info/twrp.fstab.final 2>/dev/null || echo "twrp.fstab.final: tidak ditemukan (build mungkin gagal sebelum tahap ini)" > debug-info/twrp.fstab.final
+          cp -v "$OUT/twrp.fstab" debug-info/twrp.fstab.final 2>/dev/null || echo "twrp.fstab.final: tidak ditemukan" > debug-info/twrp.fstab.final
           cp -v "$OUT/recovery.fstab" debug-info/recovery.fstab.final 2>/dev/null || echo "recovery.fstab.final: tidak ditemukan" > debug-info/recovery.fstab.final
           cp -v device/xiaomi/vince/BoardConfig.mk debug-info/BoardConfig.mk.used 2>/dev/null || true
-          # Dump partition table via lpdump kalau tool-nya ada di out (opsional, best-effort)
           echo "Build finished at $(date)" > debug-info/build-meta.txt
           echo "TARGET_PRODUCT=twrp_vince" >> debug-info/build-meta.txt
 
@@ -538,3 +461,4 @@ jobs:
             🕒 *Waktu:* ${BUILD_DATE}
             📄 Full log & disk_monitor.log sudah dikirim/tersedia di artifacts.
             🔗 [Lihat Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            

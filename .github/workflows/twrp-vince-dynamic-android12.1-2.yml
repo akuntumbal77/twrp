@@ -355,7 +355,7 @@ jobs:
 
       - name: Check if assemble_vintf blocks recoveryimage target
         working-directory: twrp
-                env:
+        env:
           KBUILD_BUILD_USER: "RahmatSobrian"
           KBUILD_BUILD_HOST: "YoruProject"
         run: |

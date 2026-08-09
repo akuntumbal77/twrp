@@ -107,45 +107,44 @@ jobs:
           rm -rf .repo
           df -h | tee -a /tmp/full_build.log
           
-      - name: Patch assemble_vintf (remove VTS test_suites dependency)
-        working-directory: twrp
+      - name: Patch libvintf Android.bp
         run: |
           set -e
           BP="system/libvintf/Android.bp"
 
-            if [ ! -f "$BP" ]; then
+          if [ ! -f "$BP" ]; then
             echo "⚠️ $BP tidak ditemukan, skip patch"
-            else
+          else
             echo "== Sebelum patch =="
             grep -n "assemble_vintf\|test_suites\|libvts_vintf_test_common" "$BP" || true
 
             python3 - "$BP" << 'PYEOF'
-            import re, sys
+          import re, sys
 
-            path = sys.argv[1]
-            with open(path) as f:
-            content = f.read()
+          path = sys.argv[1]
+          with open(path) as f:
+              content = f.read()
 
-            pattern = re.compile(r'(cc_binary_host\s*\{[^}]*name:\s*"assemble_vintf"[^}]*\})', re.DOTALL)
+          pattern = re.compile(r'(cc_binary_host\s*\{[^}]*name:\s*"assemble_vintf"[^}]*\})', re.DOTALL)
 
-            def strip_test_suites(match):
-            block = match.group(1)
-            block = re.sub(r'test_suites:\s*\[[^\]]*\],?\n?', '', block)
-            return block
+          def strip_test_suites(match):
+              block = match.group(1)
+              block = re.sub(r'test_suites:\s*\[[^\]]*\],?\n?', '', block)
+              return block
 
-            new_content, n = pattern.subn(strip_test_suites, content)
+          new_content, n = pattern.subn(strip_test_suites, content)
 
-            if n == 0:
-            print("⚠️ Blok assemble_vintf tidak ketemu, cek manual formatnya")
-            else:
-            with open(path, 'w') as f:
-            f.write(new_content)
-            print(f"✅ test_suites dihapus dari {n} blok assemble_vintf")
-            PYEOF
+          if n == 0:
+              print("⚠️ Blok assemble_vintf tidak ketemu, cek manual formatnya")
+          else:
+              with open(path, 'w') as f:
+                  f.write(new_content)
+              print(f"✅ test_suites dihapus dari {n} blok assemble_vintf")
+          PYEOF
 
             echo "== Sesudah patch =="
             grep -n "assemble_vintf\|test_suites\|libvts_vintf_test_common" "$BP" || echo "(bersih)"
-            fi
+          fi
 
       - name: Check Disk Space (after repo sync)
         run: df -h

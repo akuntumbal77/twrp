@@ -22,14 +22,26 @@ jobs:
           large-packages: true
           swap-storage: true
           docker-images: true
-
-      - name: Check Disk Space (after reclaim)
-        run: df -h
+          
+      - name: Free Disk Space
+        uses: endersonmenezes/free-disk-space@v3  # Use @main for latest, @v3 for stable
+        with:
+          remove_android: true
+          remove_dotnet: true
+          remove_haskell: true
+          remove_tool_cache: true
+          remove_swap: true
+          remove_packages: "azure-cli google-cloud-cli microsoft-edge-stable google-chrome-stable firefox postgresql* temurin-* *llvm* mysql* dotnet-sdk-*"
+          remove_packages_one_command: true
+          remove_folders: "/usr/share/swift /usr/share/miniconda /usr/share/az* /usr/local/lib/node_modules /usr/local/share/chromium /usr/local/share/powershell /usr/local/julia /usr/local/aws-cli /usr/local/aws-sam-cli /usr/share/gradle"
+          rm_cmd: "rm"  # Use 'rmz' for faster deletion (default: 'rm')
+          rmz_version: "3.1.1"  # Required when rm_cmd is 'rmz'
+          testing: false
 
       - name: Set Swap Space
         uses: pierotofy/set-swap-space@master
         with:
-          swap-size-gb: 4
+          swap-size-gb: 2
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -57,8 +69,6 @@ jobs:
             make python3 bc flex bison gperf gawk \
             libxml2-utils xsltproc libssl-dev \
             build-essential ccache 2>&1 | tee -a /tmp/full_build.log
-          sudo apt-get clean
-          sudo rm -rf /var/lib/apt/lists/*
 
       - name: Setup Repo Tool
         run: |
@@ -106,31 +116,6 @@ jobs:
           rm -rf .repo
           df -h | tee -a /tmp/full_build.log
 
-      - name: Patch libvintf Android.bp (hapus dependency libvts_vintf_test_common)
-        run: |
-          cd twrp
-          set -e
-          BP="system/libvintf/Android.bp"
-
-          if [ ! -f "$BP" ]; then
-            echo "⚠️ $BP tidak ditemukan, skip patch" | tee -a /tmp/full_build.log
-          else
-            echo "== Sebelum patch ==" | tee -a /tmp/full_build.log
-            grep -n "libvts_vintf_test_common" "$BP" | tee -a /tmp/full_build.log || echo "(tidak ada referensi ditemukan)" | tee -a /tmp/full_build.log
-
-            # Hapus SETIAP baris yang menyebut libvts_vintf_test_common (baik di
-            # test_suites, required, atau data_libs) - ini penyebab error
-            # "module assemble_vintf missing dependencies: libvts_vintf_test_common"
-            # karena repo test/vts nggak ikut ke-sync di minimal manifest.
-            sed -i '/libvts_vintf_test_common/d' "$BP"
-
-            echo "== Sesudah patch ==" | tee -a /tmp/full_build.log
-            grep -n "libvts_vintf_test_common" "$BP" | tee -a /tmp/full_build.log || echo "(bersih - tidak ada lagi referensi libvts_vintf_test_common)" | tee -a /tmp/full_build.log
-          fi
-
-      - name: Check Disk Space (after repo sync)
-        run: df -h
-
       - name: Clone Device Tree (vince)
         run: |
           cd twrp
@@ -140,17 +125,34 @@ jobs:
             device/xiaomi/vince \
             2>&1 | tee -a /tmp/full_build.log
 
+      # =====================================================================
+      # PENTING: Nilai BOARD_SUPER_PARTITION_SIZE di bawah ini PLACEHOLDER.
+      # Wajib disesuaikan dengan ukuran "super" milik ROM kamu:
+      #   1. Buka device tree ROM: github.com/Project-Nightcord/android_device_xiaomi_vince
+      #      branch lineage-22.2 -> file BoardConfig.mk
+      #   2. Cari baris BOARD_SUPER_PARTITION_SIZE dan BOARD_SUPER_PARTITION_GROUPS
+      #      lalu salin nilainya persis ke sini (ganti angka di bawah).
+      #   3. Kalau ROM kamu juga punya partisi system_ext/product terpisah,
+      #      pastikan namanya cocok dengan BOARD_..._PARTITION_LIST di bawah.
+      # =====================================================================
       - name: Patch Device Tree for Dynamic Partition (Super) Support
         run: |
           cd twrp/device/xiaomi/vince
           set -e
 
           echo "== Patch BoardConfig.mk =="
+          # Hapus baris size statis system/vendor lama (sudah tidak relevan, jadi logical di super)
+          # BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE dihapus di sini supaya tidak dobel -
+          # nanti ditambahkan lagi di blok dynamic partition di bawah.
           sed -i '/BOARD_SYSTEMIMAGE_PARTITION_SIZE/d;/BOARD_VENDORIMAGE_PARTITION_SIZE/d;/BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE/d' BoardConfig.mk
 
           cat >> BoardConfig.mk << 'EOF'
 
           # ==== Dynamic Partitions (retrofit super) - vince/mi8953 ====
+          # Nilai di bawah disalin persis dari BoardConfig.mk device tree ROM
+          # (Project-Nightcord/android_device_xiaomi_vince, branch lineage-22.2).
+          # Device ini TIDAK punya partisi fisik "super" tersendiri - metadata
+          # dynamic partition menumpang di partisi fisik lama "cust" dan "system".
           BOARD_SUPER_PARTITION_BLOCK_DEVICES := cust system
           BOARD_SUPER_PARTITION_METADATA_DEVICE := system
           BOARD_SUPER_PARTITION_CUST_DEVICE_SIZE := 536870912
@@ -166,16 +168,31 @@ jobs:
           TARGET_COPY_OUT_VENDOR := vendor
           TARGET_COPY_OUT_ODM := odm
 
+          # WAJIB: build system minta filesystem type tiap partisi didefinisikan,
+          # meskipun runtime-nya jadi logical partition di dalam super.
+          # (Ini yang kelupaan di percobaan pertama - bikin build gagal dengan error
+          # "either BOARD_PREBUILT_PRODUCTIMAGE or BOARD_PRODUCTIMAGE_FILE_SYSTEM_TYPE must be set")
           BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
           BOARD_PRODUCTIMAGE_FILE_SYSTEM_TYPE := ext4
           BOARD_SYSTEM_EXTIMAGE_FILE_SYSTEM_TYPE := ext4
           BOARD_ODMIMAGE_FILE_SYSTEM_TYPE := ext4
 
+          # TWRP: aktifkan dukungan mount partisi logical
           TW_INCLUDE_LOGICAL := true
           EOF
 
-          echo "== Patch twrp.fstab =="
+          # CATATAN: device ini RETROFIT dynamic partition (tidak ada partisi fisik
+          # "super" tersendiri - metadata numpang di partisi fisik "cust" & "system",
+          # lihat BOARD_SUPER_PARTITION_BLOCK_DEVICES di atas). fs_mgr menemukan
+          # kedua block device itu otomatis lewat metadata, TIDAK perlu entry /super
+          # terpisah di fstab. Entry di bawah ini best-effort berdasarkan
+          # BOARD_MI8953_DYNPART_PARTITION_LIST (product system system_ext odm vendor).
+          # Kalau kamu punya file rootdir/etc/fstab.qcom dari device tree ROM,
+          # kirimkan supaya ini bisa disesuaikan 1:1 dengan punya ROM.
+
+          echo "== Patch twrp.fstab (root/system/etc/twrp.fstab) =="
           FSTAB=recovery/root/system/etc/twrp.fstab
+          # Hapus baris system/system_image/vendor/vendor_image lama
           sed -i '/^\/system /d;/^\/system_image /d;/^\/vendor /d;/^\/vendor_image /d' "$FSTAB"
 
           cat >> "$FSTAB" << 'EOF'
@@ -186,10 +203,13 @@ jobs:
           /odm             ext4   /dev/block/mapper/odm                                   flags=logical;display="Odm";backup=1;flashimg=1
           EOF
 
-          echo "== Patch recovery.fstab =="
+          echo "== Patch recovery.fstab (root/system/etc/recovery.fstab) =="
           RFSTAB=recovery/root/system/etc/recovery.fstab
+          # Hapus baris mount system/cust(vendor) lama yang bersifat statis
           sed -i '/\/by-name\/system\s\+\/system/d;/\/by-name\/cust\s\+\/vendor/d' "$RFSTAB"
 
+          # Entri di bawah disalin persis dari rootdir/etc/fstab.qcom ROM
+          # (Project-Nightcord/android_device_xiaomi_vince, lineage-22.2)
           cat >> "$RFSTAB" << 'EOF'
           system				/system			ext4	ro								wait,logical,first_stage_mount
           system				/system			erofs	ro								wait,logical,first_stage_mount
@@ -213,34 +233,17 @@ jobs:
       - name: Increase Kernel/Recovery Log Verbosity (for debugging)
         run: |
           cd twrp/device/xiaomi/vince
+          # Naikkan verbosity dmesg kernel supaya error mount dynamic partition
+          # (liblp/fs_mgr) kelihatan jelas lewat `adb shell dmesg` saat di recovery.
+          # Ini cuma nambah opsi di cmdline (dibakar ke header boot image saat
+          # mkbootimg), TIDAK perlu rebuild kernel.
           sed -i 's/^BOARD_KERNEL_CMDLINE := /BOARD_KERNEL_CMDLINE := printk.devkmsg=on loglevel=8 /' BoardConfig.mk
           grep "^BOARD_KERNEL_CMDLINE" BoardConfig.mk
+
+          # Pastikan logcat & logd aktif (dibutuhkan supaya `adb shell logcat`
+          # bisa dipakai buat lihat error mount/init dari recovery)
           grep -q "^TWRP_INCLUDE_LOGCAT" BoardConfig.mk || echo "TWRP_INCLUDE_LOGCAT := true" >> BoardConfig.mk
           grep -q "^TARGET_USES_LOGD" BoardConfig.mk || echo "TARGET_USES_LOGD := true" >> BoardConfig.mk
-
-      - name: Extra Cleanup Before Build
-        run: |
-          cd twrp
-          rm -rf prebuilts/qemu-kernel 2>/dev/null || true
-          rm -rf prebuilts/android-emulator 2>/dev/null || true
-          rm -rf test 2>/dev/null || true
-          rm -rf cts 2>/dev/null || true
-          rm -rf pdk 2>/dev/null || true
-          sudo apt-get clean 2>/dev/null || true
-          docker system prune -af 2>/dev/null || true
-          df -h
-
-      - name: Check Disk Space (before compile)
-        run: df -h
-
-      - name: Show Biggest Folders (debug)
-        working-directory: twrp
-        run: |
-          echo "== Top 15 folder terbesar di twrp/ =="
-          du -h --max-depth=1 . 2>/dev/null | sort -rh | head -15
-          echo ""
-          echo "== Total ukuran twrp/ =="
-          du -sh . 2>/dev/null
 
       - name: Notify Telegram - Compiling
         env:
@@ -255,38 +258,7 @@ jobs:
             🧵 *Threads:* $(nproc --all) cores
             🔨 Build sedang berjalan, harap tunggu..."
 
-      - name: Start Disk Monitor (background)
-        env:
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-        run: |
-          (
-            ALERTED=false
-            while true; do
-              echo "=== $(date +%H:%M:%S) ===" >> /tmp/disk_monitor.log
-              df -h >> /tmp/disk_monitor.log
-              echo "" >> /tmp/disk_monitor.log
-
-              USAGE=$(df / | tail -1 | awk '{print $5}' | tr -d '%')
-              AVAIL=$(df -h / | tail -1 | awk '{print $4}')
-
-              if [ "$USAGE" -ge 85 ] && [ "$ALERTED" = false ]; then
-                ALERTED=true
-                curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
-                  -d chat_id="${TG_CHAT_ID}" \
-                  -d parse_mode="Markdown" \
-                  -d text="⚠️ *Disk Space Kritis!*
-              💾 Terpakai: ${USAGE}% (sisa: ${AVAIL})
-              🕒 $(date +%H:%M:%S)
-              📱 Build TWRP vince masih jalan, kemungkinan bakal gagal karena disk penuh."
-              fi
-
-              sleep 120
-            done
-          ) &
-          echo "DISK_MONITOR_PID=$!" >> $GITHUB_ENV
-
-      - name: Build Recovery Image
+      - name: Start Build (with log)
         working-directory: twrp
         env:
           KBUILD_BUILD_USER: "RahmatSobrian"
@@ -294,8 +266,6 @@ jobs:
         run: |
           mkdir -p logs
           export ALLOW_MISSING_DEPENDENCIES=true
-          export BUILD_BROKEN_MISSING_REQUIRED_MODULES=true
-          export SOONG_ALLOW_MISSING_DEPENDENCIES=true
           export LC_ALL=C
 
           set +e
@@ -323,19 +293,6 @@ jobs:
 
           mka -j$(nproc --all) recoveryimage 2>&1 | tee logs/build.txt | tee -a /tmp/full_build.log
 
-      - name: Stop Disk Monitor & Save Log
-        if: always()
-        run: |
-          kill "$DISK_MONITOR_PID" 2>/dev/null || true
-          echo "=== FINAL $(date +%H:%M:%S) ===" >> /tmp/disk_monitor.log
-          df -h >> /tmp/disk_monitor.log
-          mkdir -p twrp/debug-info
-          cp /tmp/disk_monitor.log twrp/debug-info/disk_monitor.log 2>/dev/null || true
-
-      - name: Check Disk Space (after compile)
-        if: always()
-        run: df -h
-
       - name: Upload Build Log
         if: always()
         uses: actions/upload-artifact@v4
@@ -349,9 +306,13 @@ jobs:
         run: |
           mkdir -p debug-info
           OUT=out/target/product/vince/recovery/root/system/etc
-          cp -v "$OUT/twrp.fstab" debug-info/twrp.fstab.final 2>/dev/null || echo "twrp.fstab.final: tidak ditemukan" > debug-info/twrp.fstab.final
+          # File FINAL yang beneran masuk ramdisk recovery, buat dibandingkan
+          # sama file yang kita patch manual - kalau beda, artinya ada step
+          # build system yang overwrite/generate ulang.
+          cp -v "$OUT/twrp.fstab" debug-info/twrp.fstab.final 2>/dev/null || echo "twrp.fstab.final: tidak ditemukan (build mungkin gagal sebelum tahap ini)" > debug-info/twrp.fstab.final
           cp -v "$OUT/recovery.fstab" debug-info/recovery.fstab.final 2>/dev/null || echo "recovery.fstab.final: tidak ditemukan" > debug-info/recovery.fstab.final
           cp -v device/xiaomi/vince/BoardConfig.mk debug-info/BoardConfig.mk.used 2>/dev/null || true
+          # Dump partition table via lpdump kalau tool-nya ada di out (opsional, best-effort)
           echo "Build finished at $(date)" > debug-info/build-meta.txt
           echo "TARGET_PRODUCT=twrp_vince" >> debug-info/build-meta.txt
 
@@ -386,7 +347,6 @@ jobs:
         run: |
           BUILD_DATE=$(date +"%Y-%m-%d %H:%M:%S UTC")
           IMG_SIZE=$(du -sh twrp/out/target/product/vince/recovery.img 2>/dev/null | cut -f1 || echo "N/A")
-          DISK_FINAL=$(df -h / | tail -1 | awk '{print "Terpakai "$5" (sisa "$4")"}')
           curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TG_CHAT_ID}" \
             -d parse_mode="Markdown" \
@@ -394,9 +354,8 @@ jobs:
             📱 *Device:* Xiaomi Redmi 5 Plus (vince) - mi8953
             🌿 *Branch:* android-12.1 (patched)
             📦 *Image Size:* ${IMG_SIZE}
-            💾 *Disk saat selesai:* ${DISK_FINAL}
             🕒 *Selesai:* ${BUILD_DATE}
-            📥 Artifacts: \`recovery.img\` • \`twrp-*.zip\` • \`build.txt\` • \`disk_monitor.log\`
+            📥 Artifacts: \`recovery.img\` • \`twrp-*.zip\` • \`build.txt\`
             🔗 [Download](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
             🎉 *TWRP dynamic partition untuk vince berhasil di-build!*"
 
@@ -430,19 +389,6 @@ jobs:
             fi
           fi
 
-      - name: Send Disk Monitor Log to Telegram on Failure
-        if: failure()
-        env:
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-        run: |
-          if [ -f /tmp/disk_monitor.log ]; then
-            curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
-              -F chat_id="${TG_CHAT_ID}" \
-              -F document=@/tmp/disk_monitor.log \
-              -F caption="💾 Disk usage log tiap 2 menit selama build (TWRP vince, FAILED)"
-          fi
-
       - name: Notify Telegram - Build Failed
         if: failure()
         env:
@@ -450,15 +396,12 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: |
           BUILD_DATE=$(date +"%Y-%m-%d %H:%M:%S UTC")
-          DISK_FINAL=$(df -h / | tail -1 | awk '{print "Terpakai "$5" (sisa "$4")"}' 2>/dev/null || echo "N/A")
           curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TG_CHAT_ID}" \
             -d parse_mode="Markdown" \
             -d text="❌ *TWRP Build GAGAL! (Dynamic Partition)*
             📱 *Device:* Xiaomi Redmi 5 Plus (vince) - mi8953
             🌿 *Branch:* android-12.1 (patched)
-            💾 *Disk saat gagal:* ${DISK_FINAL}
             🕒 *Waktu:* ${BUILD_DATE}
-            📄 Full log & disk_monitor.log sudah dikirim/tersedia di artifacts.
+            📄 Full log sudah dikirim di atas.
             🔗 [Lihat Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
-            

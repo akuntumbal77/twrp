@@ -79,13 +79,13 @@ jobs:
             --data-urlencode \
             "text=🔨 *TWRP Build Started*
 
-📱 *Device:* Xiaomi Redmi 5 Plus (vince)
-🧩 *Platform:* mi8953 / MSM8953
-🌿 *Branch:* twrp-12.1
-💾 *Mode:* Retrofit Dynamic Partition
-🕒 *Time:* ${BUILD_DATE}
+          📱 *Device:* Xiaomi Redmi 5 Plus (vince)
+          🧩 *Platform:* mi8953 / MSM8953
+          🌿 *Branch:* twrp-12.1
+          💾 *Mode:* Retrofit Dynamic Partition
+          🕒 *Time:* ${BUILD_DATE}
 
-🔗 [GitHub Actions](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          🔗 [GitHub Actions](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
 
       # ============================================================
       # PACKAGES
@@ -167,9 +167,9 @@ jobs:
             --data-urlencode \
             "text=🔄 *Syncing TWRP Sources...*
 
-📦 Manifest: minimal-manifest-twrp
-🌿 Branch: twrp-12.1
-⚙️ Please wait..."
+          📦 Manifest: minimal-manifest-twrp
+          🌿 Branch: twrp-12.1
+          ⚙️ Please wait..."
 
       # ============================================================
       # INIT + SYNC
@@ -310,42 +310,42 @@ jobs:
 
           cat >> BoardConfig.mk << 'EOF'
 
-# ============================================================
-# RETROFIT DYNAMIC PARTITION - vince / mi8953
-# ============================================================
+          # ============================================================
+          # RETROFIT DYNAMIC PARTITION - vince / mi8953
+          # ============================================================
 
-BOARD_SUPER_PARTITION_BLOCK_DEVICES := cust system
-BOARD_SUPER_PARTITION_METADATA_DEVICE := system
+          BOARD_SUPER_PARTITION_BLOCK_DEVICES := cust system
+          BOARD_SUPER_PARTITION_METADATA_DEVICE := system
 
-BOARD_SUPER_PARTITION_CUST_DEVICE_SIZE := 536870912
-BOARD_SUPER_PARTITION_SYSTEM_DEVICE_SIZE := 3221225472
+          BOARD_SUPER_PARTITION_CUST_DEVICE_SIZE := 536870912
+          BOARD_SUPER_PARTITION_SYSTEM_DEVICE_SIZE := 3221225472
 
-BOARD_SUPER_PARTITION_SIZE := $(shell expr $(BOARD_SUPER_PARTITION_CUST_DEVICE_SIZE) + $(BOARD_SUPER_PARTITION_SYSTEM_DEVICE_SIZE))
+          BOARD_SUPER_PARTITION_SIZE := $(shell expr $(BOARD_SUPER_PARTITION_CUST_DEVICE_SIZE) + $(BOARD_SUPER_PARTITION_SYSTEM_DEVICE_SIZE))
 
-BOARD_SUPER_PARTITION_GROUPS := mi8953_dynpart
+          BOARD_SUPER_PARTITION_GROUPS := mi8953_dynpart
 
-BOARD_MI8953_DYNPART_SIZE := $(shell expr $(BOARD_SUPER_PARTITION_SIZE) - 4194304)
+          BOARD_MI8953_DYNPART_SIZE := $(shell expr $(BOARD_SUPER_PARTITION_SIZE) - 4194304)
 
-BOARD_MI8953_DYNPART_PARTITION_LIST := \
-    product \
-    system \
-    system_ext \
-    odm \
-    vendor
+          BOARD_MI8953_DYNPART_PARTITION_LIST := \
+              product \
+              system \
+              system_ext \
+              odm \
+              vendor
 
-TARGET_COPY_OUT_PRODUCT := product
-TARGET_COPY_OUT_SYSTEM_EXT := system_ext
-TARGET_COPY_OUT_VENDOR := vendor
-TARGET_COPY_OUT_ODM := odm
+          TARGET_COPY_OUT_PRODUCT := product
+          TARGET_COPY_OUT_SYSTEM_EXT := system_ext
+          TARGET_COPY_OUT_VENDOR := vendor
+          TARGET_COPY_OUT_ODM := odm
 
-BOARD_PRODUCTIMAGE_FILE_SYSTEM_TYPE := ext4
-BOARD_SYSTEM_EXTIMAGE_FILE_SYSTEM_TYPE := ext4
-BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
-BOARD_ODMIMAGE_FILE_SYSTEM_TYPE := ext4
+          BOARD_PRODUCTIMAGE_FILE_SYSTEM_TYPE := ext4
+          BOARD_SYSTEM_EXTIMAGE_FILE_SYSTEM_TYPE := ext4
+          BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
+          BOARD_ODMIMAGE_FILE_SYSTEM_TYPE := ext4
 
-TW_INCLUDE_LOGICAL := true
+          TW_INCLUDE_LOGICAL := true
 
-EOF
+          EOF
 
           # ========================================================
           # TWRP FSTAB
@@ -403,38 +403,38 @@ EOF
           # ========================================================
 
           cat > recovery/root/system/etc/twrp.flags.dynpart << 'EOF'
-# ============================================================
-# VINCE RETROFIT DYNAMIC PARTITION
-# ============================================================
+          # ============================================================
+          # VINCE RETROFIT DYNAMIC PARTITION
+          # ============================================================
 
-/data ext4 /dev/block/bootdevice/by-name/userdata flags=encryptable=footer;fsflags="discard"
+          /data ext4 /dev/block/bootdevice/by-name/userdata flags=encryptable=footer;fsflags="discard"
 
-/metadata ext4 /dev/block/bootdevice/by-name/logdump flags=display="Metadata";fsflags="discard"
+          /metadata ext4 /dev/block/bootdevice/by-name/logdump flags=display="Metadata";fsflags="discard"
 
-EOF
+          EOF
 
           # ========================================================
           # NON-DYNAMIC FALLBACK
           # ========================================================
 
           cat > recovery/root/system/etc/twrp.flags.nondynpart << 'EOF'
-# ============================================================
-# VINCE STATIC PARTITION FALLBACK
-# ============================================================
+          # ============================================================
+          # VINCE STATIC PARTITION FALLBACK
+          # ============================================================
 
-/system_root ext4 /dev/block/bootdevice/by-name/system flags=display="System";fsflags="discard";wipeingui
+          /system_root ext4 /dev/block/bootdevice/by-name/system flags=display="System";fsflags="discard";wipeingui
 
-/system_image emmc /dev/block/bootdevice/by-name/system flags=display="System";backup=1;flashimg=1
+          /system_image emmc /dev/block/bootdevice/by-name/system flags=display="System";backup=1;flashimg=1
 
-/vendor ext4 /dev/block/bootdevice/by-name/cust flags=display="Vendor";fsflags="discard";wipeingui
+          /vendor ext4 /dev/block/bootdevice/by-name/cust flags=display="Vendor";fsflags="discard";wipeingui
 
-/vendor_image emmc /dev/block/bootdevice/by-name/cust flags=display="Vendor";backup=1;flashimg=1
+          /vendor_image emmc /dev/block/bootdevice/by-name/cust flags=display="Vendor";backup=1;flashimg=1
 
-/data ext4 /dev/block/bootdevice/by-name/userdata flags=encryptable=footer;fsflags="discard"
+          /data ext4 /dev/block/bootdevice/by-name/userdata flags=encryptable=footer;fsflags="discard"
 
-/metadata ext4 /dev/block/bootdevice/by-name/logdump flags=display="Metadata";fsflags="discard"
+          /metadata ext4 /dev/block/bootdevice/by-name/logdump flags=display="Metadata";fsflags="discard"
 
-EOF
+          EOF
 
           # ========================================================
           # MERGE FSTAB SCRIPT
@@ -443,29 +443,29 @@ EOF
           mkdir -p recovery/root/system/bin
 
           cat > recovery/root/system/bin/merge-fstab.sh << 'EOF'
-#!/system/bin/sh
+          #!/system/bin/sh
 
-LOG_TAG="vince-dynpart"
+          LOG_TAG="vince-dynpart"
 
-log_msg()
-{
-    echo "[${LOG_TAG}] $*"
-}
+          log_msg()
+          {
+              echo "[${LOG_TAG}] $*"
+          }
 
-log_msg "Starting dynamic partition detection"
+          log_msg "Starting dynamic partition detection"
 
-# ============================================================
-# WAIT FOR BLOCK DEVICE
-# ============================================================
+          # ============================================================
+          # WAIT FOR BLOCK DEVICE
+          # ============================================================
 
-for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
-do
-    if [ -e /dev/block/by-name/system ]; then
-        break
-    fi
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+          do
+              if [ -e /dev/block/by-name/system ]; then
+                  break
+              fi
 
-    sleep 0.5
-done
+              sleep 0.5
+          done
 
 # ============================================================
 # CREATE COMPATIBILITY SYMLINK
@@ -597,33 +597,33 @@ if [ "$DYNAMIC" = "1" ]; then
 
     cat >> /system/etc/recovery.fstab << 'EOF'
 
-# VINCE_DYNAMIC_BEGIN
+          # VINCE_DYNAMIC_BEGIN
 
-system /system ext4 rw,barrier=1,discard wait,logical
+          system /system ext4 rw,barrier=1,discard wait,logical
 
-system_ext /system_ext ext4 rw,barrier=1,discard wait,logical
+          system_ext /system_ext ext4 rw,barrier=1,discard wait,logical
 
-product /product ext4 rw,barrier=1,discard wait,logical
+          product /product ext4 rw,barrier=1,discard wait,logical
 
-vendor /vendor ext4 rw,barrier=1,discard wait,logical
+          vendor /vendor ext4 rw,barrier=1,discard wait,logical
 
-odm /odm ext4 rw,barrier=1,discard wait,logical
+          odm /odm ext4 rw,barrier=1,discard wait,logical
 
-# VINCE_DYNAMIC_END
+          # VINCE_DYNAMIC_END
 
-EOF
+          EOF
 
-    cat >> /system/etc/twrp.flags << 'EOF'
+              cat >> /system/etc/twrp.flags << 'EOF'
 
-# VINCE_DYNAMIC_BEGIN
+          # VINCE_DYNAMIC_BEGIN
 
-/super_cust emmc /dev/block/by-name/cust flags=display="Super_cust";backup=1
+          /super_cust emmc /dev/block/by-name/cust flags=display="Super_cust";backup=1
 
-# VINCE_DYNAMIC_END
+          # VINCE_DYNAMIC_END
 
-EOF
+          EOF
 
-else
+          else
 
     # ========================================================
     # STATIC FALLBACK
@@ -635,56 +635,56 @@ else
 
     cat >> /system/etc/twrp.flags << 'EOF'
 
-# VINCE_DYNAMIC_BEGIN
+          # VINCE_DYNAMIC_BEGIN
 
-/super emmc /dev/block/by-name/system flags=display="Super";backup=1
+          /super emmc /dev/block/by-name/system flags=display="Super";backup=1
 
-/super_cust emmc /dev/block/by-name/cust flags=display="Super_cust";backup=1
+          /super_cust emmc /dev/block/by-name/cust flags=display="Super_cust";backup=1
 
-# VINCE_DYNAMIC_END
+          # VINCE_DYNAMIC_END
 
-EOF
+          EOF
 
-fi
+          fi
 
-# ============================================================
-# DEBUG INFORMATION
-# ============================================================
+          # ============================================================
+          # DEBUG INFORMATION
+          # ============================================================
 
-log_msg "===== BOOT PROPERTY ====="
+          log_msg "===== BOOT PROPERTY ====="
 
-getprop ro.boot.dynamic_partitions 2>/dev/null || true
+          getprop ro.boot.dynamic_partitions 2>/dev/null || true
 
-log_msg "===== MAPPER ====="
+          log_msg "===== MAPPER ====="
 
-ls -l /dev/block/mapper 2>/dev/null || true
+          ls -l /dev/block/mapper 2>/dev/null || true
 
-log_msg "===== DM NAMES ====="
+          log_msg "===== DM NAMES ====="
 
-for f in /sys/block/dm-*/dm/name
-do
-    [ -f "$f" ] || continue
-    echo "$f: $(cat "$f" 2>/dev/null)"
-done
+          for f in /sys/block/dm-*/dm/name
+          do
+              [ -f "$f" ] || continue
+              echo "$f: $(cat "$f" 2>/dev/null)"
+          done
 
-log_msg "===== BY-NAME ====="
+          log_msg "===== BY-NAME ====="
 
-ls -l /dev/block/by-name 2>/dev/null | \
-    grep -E 'super|system|vendor|product|odm|system_ext|cust' || true
+          ls -l /dev/block/by-name 2>/dev/null | \
+              grep -E 'super|system|vendor|product|odm|system_ext|cust' || true
 
-log_msg "===== RECOVERY FSTAB ====="
+          log_msg "===== RECOVERY FSTAB ====="
 
-cat /system/etc/recovery.fstab 2>/dev/null || true
+          cat /system/etc/recovery.fstab 2>/dev/null || true
 
-log_msg "===== TWRP FLAGS ====="
+          log_msg "===== TWRP FLAGS ====="
 
-cat /system/etc/twrp.flags 2>/dev/null || true
+          cat /system/etc/twrp.flags 2>/dev/null || true
 
-log_msg "Dynamic detection result: $DYNAMIC"
+          log_msg "Dynamic detection result: $DYNAMIC"
 
-exit 0
+          exit 0
 
-EOF
+          EOF
 
           chmod 755 recovery/root/system/bin/merge-fstab.sh
 
@@ -718,14 +718,14 @@ EOF
           # Tambahkan hanya sekali
           cat >> "$INIT_RC" << 'EOF'
 
-# ============================================================
-# VINCE RETROFIT DYNAMIC PARTITION
-# ============================================================
+          # ============================================================
+          # VINCE RETROFIT DYNAMIC PARTITION
+          # ============================================================
 
-on init
-    exec_background u:r:recovery:s0 root root -- /system/bin/merge-fstab.sh
+          on init
+              exec_background u:r:recovery:s0 root root -- /system/bin/merge-fstab.sh
 
-EOF
+          EOF
 
           # ========================================================
           # DEBUG OUTPUT

@@ -22,7 +22,7 @@ jobs:
           large-packages: true
           swap-storage: true
           docker-images: true
-
+          
       - name: Free Disk Space
         uses: endersonmenezes/free-disk-space@v3  # Use @main for latest, @v3 for stable
         with:
@@ -60,7 +60,7 @@ jobs:
             -d parse_mode="Markdown" \
             -d text="🔨 *TWRP Build Started (Dynamic Partition)*
             📱 *Device:* Xiaomi Redmi 5 Plus (vince) - mi8953
-            🌿 *Branch:* android-12.1 (patched: super/dynamic, runtime fstab merge)
+            🌿 *Branch:* android-12.1 (patched: super/dynamic)
             🕒 *Time:* ${BUILD_DATE}
             🔗 [GitHub Actions](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
 
@@ -72,8 +72,6 @@ jobs:
             make python3 bc flex bison gperf gawk \
             libxml2-utils xsltproc libssl-dev \
             build-essential ccache 2>&1 | tee -a /tmp/full_build.log
-          sudo apt-get clean
-          sudo rm -rf /var/lib/apt/lists/*
 
       - name: Setup Repo Tool
         run: |
@@ -134,28 +132,9 @@ jobs:
             2>&1 | tee -a /tmp/full_build.log
 
       # =====================================================================
-      # ROOT CAUSE (terkonfirmasi dari analisis pstore log + device tree
-      # pembanding mi8937/msm8937 yang sudah TERBUKTI boot & install ROM
-      # dynamic partition dengan benar):
-      #
-      #   Base twrp.fstab vince punya entry STATIS:
-      #     /system          ext4   .../by-name/system   ...
-      #     /system_image    emmc   .../by-name/system   ...
-      #   Installer script ROM dynamic partition (Lunaris dkk) memanggil
-      #   map_partition("system") saat instalasi, yang di-resolve TWRP lewat
-      #   fstab. Karena ada entry /system statis yang salah konteks (device
-      #   ini sebenarnya dynamic partition, bukan statis), TWRP fallback ke
-      #   pencarian /system_root yang TIDAK ADA sama sekali di fstab -> error
-      #   "Unable to find partition for path '/system_root'" -> install gagal.
-      #
-      #   Device tree mi8937/msm8937 (referensi yang terbukti bekerja) TIDAK
-      #   PERNAH menaruh /system statis di base twrp.fstab. Sebagai gantinya
-      #   mereka pakai skema RUNTIME MERGE (merge-fstab.sh): base fstab cuma
-      #   punya /data & /metadata, lalu saat boot recovery, script mendeteksi
-      #   apakah device dynamic partition (baca marker di partition system)
-      #   atau bukan, baru append entry system/vendor/dst yang sesuai.
-      #
-      # FIX: replikasi skema ini persis untuk vince/mi8953.
+      # PENTING: Nilai BOARD_SUPER_PARTITION_SIZE di bawah ini disalin persis
+      # dari BoardConfig.mk device tree ROM (Project-Nightcord/android_device_xiaomi_vince,
+      # branch lineage-22.2). Kalau ROM kamu ganti, cek ulang nilai ini.
       # =====================================================================
       - name: Patch Device Tree for Dynamic Partition (Super) Support
         run: |
@@ -196,10 +175,31 @@ jobs:
           TW_INCLUDE_LOGICAL := true
           EOF
 
+          # ===================================================================
+          # ROOT CAUSE (terkonfirmasi dari analisis pstore log + perbandingan
+          # device tree mi8937/msm8937 yang SUDAH TERBUKTI boot & install ROM
+          # dynamic partition dengan benar):
+          #
+          #   Base twrp.fstab vince (sebelum patch) punya entry STATIS:
+          #     /system          ext4   .../by-name/system   ...
+          #     /system_image    emmc   .../by-name/system   ...
+          #   Installer script ROM dynamic partition (Lunaris dkk) manggil
+          #   map_partition("system") saat instalasi, di-resolve TWRP lewat
+          #   fstab. Karena ada entry /system statis yang salah konteks
+          #   (device ini dynamic partition, bukan statis), TWRP fallback ke
+          #   /system_root yang TIDAK ADA -> error "Unable to find partition
+          #   for path '/system_root'" -> install gagal.
+          #
+          #   Device tree mi8937/msm8937 (referensi yang terbukti bekerja)
+          #   TIDAK PERNAH menaruh /system statis di base twrp.fstab. Mereka
+          #   pakai skema RUNTIME MERGE (merge-fstab.sh): base fstab cuma
+          #   punya /data & /metadata, lalu saat boot recovery, script
+          #   mendeteksi apakah device dynamic partition (baca marker di
+          #   partition system) atau bukan, baru append entry system/vendor/
+          #   dst yang sesuai.
+          # ===================================================================
+
           echo "== [FIX UTAMA] Hapus entry /system & /system_image & /vendor statis dari twrp.fstab =="
-          # Ini yang bikin map_partition("system") gagal & fallback ke
-          # /system_root yang tidak ada. Base fstab TIDAK BOLEH menyebut
-          # /system atau /vendor sama sekali - itu di-generate runtime.
           FSTAB=recovery/root/system/etc/twrp.fstab
           sed -i '/^\/system /d;/^\/system_image /d;/^\/vendor /d;/^\/vendor_image /d' "$FSTAB"
           echo "== Hasil twrp.fstab (base, tanpa system/vendor statis) =="
@@ -293,9 +293,15 @@ jobs:
       - name: Increase Kernel/Recovery Log Verbosity (for debugging)
         run: |
           cd twrp/device/xiaomi/vince
+          # Naikkan verbosity dmesg kernel supaya error mount dynamic partition
+          # (liblp/fs_mgr) kelihatan jelas lewat `adb shell dmesg` saat di recovery.
+          # Ini cuma nambah opsi di cmdline (dibakar ke header boot image saat
+          # mkbootimg), TIDAK perlu rebuild kernel.
           sed -i 's/^BOARD_KERNEL_CMDLINE := /BOARD_KERNEL_CMDLINE := printk.devkmsg=on loglevel=8 /' BoardConfig.mk
           grep "^BOARD_KERNEL_CMDLINE" BoardConfig.mk
 
+          # Pastikan logcat & logd aktif (dibutuhkan supaya `adb shell logcat`
+          # bisa dipakai buat lihat error mount/init dari recovery)
           grep -q "^TWRP_INCLUDE_LOGCAT" BoardConfig.mk || echo "TWRP_INCLUDE_LOGCAT := true" >> BoardConfig.mk
           grep -q "^TARGET_USES_LOGD" BoardConfig.mk || echo "TARGET_USES_LOGD := true" >> BoardConfig.mk
 
@@ -308,18 +314,6 @@ jobs:
           sed -i 's/^TW_DEVICE_VERSION := .*/TW_DEVICE_VERSION := Redmi 5 Plus | RahmatSobrian/' BoardConfig.mk
           echo "== Sesudah =="
           grep -n "^TW_DEVICE_VERSION" BoardConfig.mk
-
-      - name: Extra Cleanup Before Build
-        run: |
-          cd twrp
-          rm -rf prebuilts/qemu-kernel 2>/dev/null || true
-          rm -rf prebuilts/android-emulator 2>/dev/null || true
-          rm -rf test 2>/dev/null || true
-          rm -rf cts 2>/dev/null || true
-          rm -rf pdk 2>/dev/null || true
-          sudo apt-get clean 2>/dev/null || true
-          docker system prune -af 2>/dev/null || true
-          df -h
 
       - name: Check Disk Space (before compile)
         run: df -h
@@ -385,8 +379,6 @@ jobs:
         run: |
           mkdir -p logs
           export ALLOW_MISSING_DEPENDENCIES=true
-          export BUILD_BROKEN_MISSING_REQUIRED_MODULES=true
-          export SOONG_ALLOW_MISSING_DEPENDENCIES=true
           export LC_ALL=C
 
           set +e
@@ -440,11 +432,11 @@ jobs:
         run: |
           mkdir -p debug-info
           OUT=out/target/product/vince/recovery/root/system/etc
+          # File FINAL yang beneran masuk ramdisk recovery, buat dibandingkan
+          # sama file yang kita patch manual - kalau beda, artinya ada step
+          # build system yang overwrite/generate ulang.
           cp -v "$OUT/twrp.fstab" debug-info/twrp.fstab.final 2>/dev/null || echo "twrp.fstab.final: tidak ditemukan (build mungkin gagal sebelum tahap ini)" > debug-info/twrp.fstab.final
           cp -v "$OUT/recovery.fstab" debug-info/recovery.fstab.final 2>/dev/null || echo "recovery.fstab.final: tidak ditemukan" > debug-info/recovery.fstab.final
-          cp -v "$OUT/twrp.flags.dynpart" debug-info/twrp.flags.dynpart.final 2>/dev/null || true
-          cp -v "$OUT/twrp.flags.nondynpart" debug-info/twrp.flags.nondynpart.final 2>/dev/null || true
-          cp -v out/target/product/vince/recovery/root/system/bin/merge-fstab.sh debug-info/merge-fstab.sh.final 2>/dev/null || true
           cp -v device/xiaomi/vince/BoardConfig.mk debug-info/BoardConfig.mk.used 2>/dev/null || true
           echo "Build finished at $(date)" > debug-info/build-meta.txt
           echo "TARGET_PRODUCT=twrp_vince" >> debug-info/build-meta.txt
@@ -486,7 +478,7 @@ jobs:
             -d parse_mode="Markdown" \
             -d text="✅ *TWRP Build Sukses! (Dynamic Partition)*
             📱 *Device:* Xiaomi Redmi 5 Plus (vince) - mi8953
-            🌿 *Branch:* android-12.1 (patched, runtime fstab merge)
+            🌿 *Branch:* android-12.1 (patched)
             📦 *Image Size:* ${IMG_SIZE}
             💾 *Disk saat selesai:* ${DISK_FINAL}
             🕒 *Selesai:* ${BUILD_DATE}

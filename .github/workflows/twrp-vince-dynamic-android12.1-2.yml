@@ -297,12 +297,26 @@ jobs:
           #
           # FIX: buat symlink asli /dev/block/by-name/super -> by-name/system,
           # karena BOARD_SUPER_PARTITION_METADATA_DEVICE := system (device
-          # yang jadi tempat metadata dynamic partition ditulis). Symlink ini
-          # dibuat SELALU (regardless dynpart terdeteksi atau belum) supaya
-          # aman dipakai updater kapan saja. Dangling symlink aman - di-resolve
-          # belakangan saat by-name/system sudah kebentuk oleh ueventd.
+          # yang jadi tempat metadata dynamic partition ditulis).
+          #
+          # GUARD TIMING: kalau /dev/block/by-name/ belum ada sama sekali saat
+          # script ini jalan (ueventd belum kelar coldboot scan), `ln -sf`
+          # akan gagal total (bukan cuma dangling symlink) karena parent
+          # directory tujuan belum terbentuk. Makanya di-poll dulu max 5 detik
+          # sebelum bikin symlink. Trigger utama sudah dipindah ke "on init"
+          # (bukan "on early-init") supaya di kondisi normal loop ini nggak
+          # perlu nunggu sama sekali - ini cuma jaring pengaman kalau boot
+          # lambat/tidak konsisten.
           # =====================================================================
-          ln -sf /dev/block/by-name/system /dev/block/by-name/super
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+              [ -e /dev/block/by-name/system ] && break
+              sleep 0.5
+          done
+          if [ -e /dev/block/by-name/system ]; then
+              ln -sf /dev/block/by-name/system /dev/block/by-name/super
+          else
+              echo "merge-fstab.sh: WARNING /dev/block/by-name/system belum ada setelah nunggu 5 detik, symlink super gagal dibuat" 1>&2
+          fi
 
           if dd if=/dev/block/by-name/system bs=256k count=1 2>/dev/null | strings | grep -q mi8953_dynpart; then
               # Dynamic partition terdeteksi
@@ -327,16 +341,29 @@ jobs:
           EOF
           chmod 755 recovery/root/system/bin/merge-fstab.sh
 
-          echo "== Daftarkan merge-fstab.sh supaya jalan saat early-init recovery =="
+          # =====================================================================
+          # FIX TIMING: trigger "on early-init" TERLALU DINI - merge-fstab.sh
+          # (dan ln -sf super di dalamnya) selesai jalan SEBELUM ueventd kelar
+          # coldboot scan (yang baru bikin /dev/block/by-name/* muncul).
+          # Terkonfirmasi dari dmesg: merge-fstab.sh exit di 4.052s, sedangkan
+          # ueventd "Coldboot took 0.203 seconds" baru kelar di 4.173s -
+          # /dev/block/by-name/ bahkan belum ada saat script kita jalan.
+          # Device tree referensi mi8937/msm8937 (proven working) pakai
+          # trigger "on init" (lebih belakang dari early-init), bukan
+          # "on early-init". Disamakan di sini.
+          # =====================================================================
+          echo "== Daftarkan merge-fstab.sh supaya jalan saat 'on init' recovery (bukan early-init) =="
           INIT_RC=$(find recovery/root -maxdepth 1 -iname "init.recovery.*.rc" | head -1)
           if [ -z "$INIT_RC" ]; then
             INIT_RC="recovery/root/init.recovery.msm8953.rc"
             touch "$INIT_RC"
           fi
+          # Hapus registrasi lama "on early-init" kalau ada, dari run sebelumnya
+          sed -i '/^on early-init$/,/merge-fstab\.sh/d' "$INIT_RC" 2>/dev/null || true
           if ! grep -q "merge-fstab.sh" "$INIT_RC"; then
             cat >> "$INIT_RC" << 'EOF'
 
-          on early-init
+          on init
               exec u:r:recovery:s0 root root -- /system/bin/merge-fstab.sh
           EOF
           fi

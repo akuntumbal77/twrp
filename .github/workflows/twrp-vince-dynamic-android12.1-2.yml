@@ -147,7 +147,9 @@ jobs:
 
           chmod a+x "${HOME}/bin/repo"
 
+          # Memastikan ${HOME}/bin terbaca dengan benar di environment step selanjutnya
           echo "${HOME}/bin" >> "${GITHUB_PATH}"
+          export PATH="${HOME}/bin:${PATH}"
 
           repo --version | tee -a /tmp/full_build.log
 
@@ -178,6 +180,8 @@ jobs:
       - name: Init & Sync TWRP Manifest
         run: |
           set -e
+
+          export PATH="${HOME}/bin:${PATH}"
 
           mkdir -p twrp
           cd twrp

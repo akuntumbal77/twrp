@@ -126,14 +126,9 @@ jobs:
             2>&1 | tee -a /tmp/full_build.log
 
       # =====================================================================
-      # PENTING: Nilai BOARD_SUPER_PARTITION_SIZE di bawah ini PLACEHOLDER.
-      # Wajib disesuaikan dengan ukuran "super" milik ROM kamu:
-      #   1. Buka device tree ROM: github.com/Project-Nightcord/android_device_xiaomi_vince
-      #      branch lineage-22.2 -> file BoardConfig.mk
-      #   2. Cari baris BOARD_SUPER_PARTITION_SIZE dan BOARD_SUPER_PARTITION_GROUPS
-      #      lalu salin nilainya persis ke sini (ganti angka di bawah).
-      #   3. Kalau ROM kamu juga punya partisi system_ext/product terpisah,
-      #      pastikan namanya cocok dengan BOARD_..._PARTITION_LIST di bawah.
+      # PENTING: Nilai BOARD_SUPER_PARTITION_SIZE di bawah ini disalin persis
+      # dari BoardConfig.mk device tree ROM (Project-Nightcord/android_device_xiaomi_vince,
+      # branch lineage-22.2). Kalau ROM kamu ganti, cek ulang nilai ini.
       # =====================================================================
       - name: Patch Device Tree for Dynamic Partition (Super) Support
         run: |
@@ -170,8 +165,6 @@ jobs:
 
           # WAJIB: build system minta filesystem type tiap partisi didefinisikan,
           # meskipun runtime-nya jadi logical partition di dalam super.
-          # (Ini yang kelupaan di percobaan pertama - bikin build gagal dengan error
-          # "either BOARD_PREBUILT_PRODUCTIMAGE or BOARD_PRODUCTIMAGE_FILE_SYSTEM_TYPE must be set")
           BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
           BOARD_PRODUCTIMAGE_FILE_SYSTEM_TYPE := ext4
           BOARD_SYSTEM_EXTIMAGE_FILE_SYSTEM_TYPE := ext4
@@ -181,22 +174,18 @@ jobs:
           TW_INCLUDE_LOGICAL := true
           EOF
 
-          # CATATAN: device ini RETROFIT dynamic partition (tidak ada partisi fisik
-          # "super" tersendiri - metadata numpang di partisi fisik "cust" & "system",
-          # lihat BOARD_SUPER_PARTITION_BLOCK_DEVICES di atas). fs_mgr menemukan
-          # kedua block device itu otomatis lewat metadata, TIDAK perlu entry /super
-          # terpisah di fstab. Entry di bawah ini best-effort berdasarkan
-          # BOARD_MI8953_DYNPART_PARTITION_LIST (product system system_ext odm vendor).
-          # Kalau kamu punya file rootdir/etc/fstab.qcom dari device tree ROM,
-          # kirimkan supaya ini bisa disesuaikan 1:1 dengan punya ROM.
-
           echo "== Patch twrp.fstab (root/system/etc/twrp.fstab) =="
           FSTAB=recovery/root/system/etc/twrp.fstab
           # Hapus baris system/system_image/vendor/vendor_image lama
           sed -i '/^\/system /d;/^\/system_image /d;/^\/vendor /d;/^\/vendor_image /d' "$FSTAB"
 
+          # /system_root WAJIB ada - ROM retrofit dynamic partition pakai
+          # updater-script gaya lama yang mount ke /system_root dulu baru
+          # /system jadi bind mount di atasnya. Tanpa ini TWRP error
+          # "Unable to find partition for path '/system_root'" saat wipe/install.
           cat >> "$FSTAB" << 'EOF'
-          /system          ext4   /dev/block/mapper/system                                flags=logical;display="System";backup=1;flashimg=1
+          /system_root     ext4   /dev/block/mapper/system                                flags=logical;display="System";backup=1;flashimg=1
+          /system          ext4   /system_root                                            flags=display="System";backup=1;flashimg=1
           /vendor          ext4   /dev/block/mapper/vendor                                flags=logical;display="Vendor";backup=1;flashimg=1
           /product         ext4   /dev/block/mapper/product                               flags=logical;display="Product";backup=1;flashimg=1
           /system_ext      ext4   /dev/block/mapper/system_ext                            flags=logical;display="System_ext";backup=1;flashimg=1
@@ -244,6 +233,16 @@ jobs:
           # bisa dipakai buat lihat error mount/init dari recovery)
           grep -q "^TWRP_INCLUDE_LOGCAT" BoardConfig.mk || echo "TWRP_INCLUDE_LOGCAT := true" >> BoardConfig.mk
           grep -q "^TARGET_USES_LOGD" BoardConfig.mk || echo "TARGET_USES_LOGD := true" >> BoardConfig.mk
+
+      - name: Patch TW_DEVICE_VERSION (ganti nama maintainer di splash TWRP)
+        run: |
+          cd twrp/device/xiaomi/vince
+          set -e
+          echo "== Sebelum =="
+          grep -n "^TW_DEVICE_VERSION" BoardConfig.mk
+          sed -i 's/^TW_DEVICE_VERSION := .*/TW_DEVICE_VERSION := Redmi 5 Plus | RahmatSobrian/' BoardConfig.mk
+          echo "== Sesudah =="
+          grep -n "^TW_DEVICE_VERSION" BoardConfig.mk
 
       - name: Notify Telegram - Compiling
         env:
@@ -312,7 +311,6 @@ jobs:
           cp -v "$OUT/twrp.fstab" debug-info/twrp.fstab.final 2>/dev/null || echo "twrp.fstab.final: tidak ditemukan (build mungkin gagal sebelum tahap ini)" > debug-info/twrp.fstab.final
           cp -v "$OUT/recovery.fstab" debug-info/recovery.fstab.final 2>/dev/null || echo "recovery.fstab.final: tidak ditemukan" > debug-info/recovery.fstab.final
           cp -v device/xiaomi/vince/BoardConfig.mk debug-info/BoardConfig.mk.used 2>/dev/null || true
-          # Dump partition table via lpdump kalau tool-nya ada di out (opsional, best-effort)
           echo "Build finished at $(date)" > debug-info/build-meta.txt
           echo "TARGET_PRODUCT=twrp_vince" >> debug-info/build-meta.txt
 

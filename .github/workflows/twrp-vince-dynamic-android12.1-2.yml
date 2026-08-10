@@ -179,37 +179,39 @@ jobs:
           # Hapus baris system/system_image/vendor/vendor_image lama
           sed -i '/^\/system /d;/^\/system_image /d;/^\/vendor /d;/^\/vendor_image /d' "$FSTAB"
 
-          # /system_root WAJIB ada - ROM retrofit dynamic partition pakai
-          # updater-script gaya lama yang mount ke /system_root dulu baru
-          # /system jadi bind mount di atasnya. Tanpa ini TWRP error
-          # "Unable to find partition for path '/system_root'" saat wipe/install.
-          cat >> "$FSTAB" << 'EOF'
-          /system_root     ext4   /dev/block/mapper/system                                flags=logical;display="System";backup=1;flashimg=1
-          /system          ext4   /system_root                                            flags=display="System";backup=1;flashimg=1
-          /vendor          ext4   /dev/block/mapper/vendor                                flags=logical;display="Vendor";backup=1;flashimg=1
-          /product         ext4   /dev/block/mapper/product                               flags=logical;display="Product";backup=1;flashimg=1
-          /system_ext      ext4   /dev/block/mapper/system_ext                            flags=logical;display="System_ext";backup=1;flashimg=1
-          /odm             ext4   /dev/block/mapper/odm                                   flags=logical;display="Odm";backup=1;flashimg=1
-          EOF
+          # CATATAN PENTING: berdasarkan device tree TWRP dynamic partition yang
+          # sudah terbukti jalan (mi8937/msm8937, arsitektur sama persis dengan
+          # vince/mi8953 - retrofit lewat cust+system), TERNYATA:
+          #   - twrp.fstab (format GUI TWRP) TIDAK PERLU entry system/vendor/
+          #     product/system_ext/odm sama sekali untuk dynamic partition -
+          #     itu cukup dari recovery.fstab di bawah.
+          #   - /system_root TIDAK DIPAKAI di mode dynamic partition (itu cuma
+          #     dipakai skema statis lama/nondynpart) - makanya kemarin muncul
+          #     error "Failed to mount /system_root (Block device required)".
+          # Jadi twrp.fstab dibiarkan seperti apa adanya, TIDAK di-append apapun
+          # untuk system/vendor/product/system_ext/odm.
+          echo "== twrp.fstab TIDAK diubah untuk dynamic partition (lihat catatan di atas) =="
+          cat "$FSTAB"
 
           echo "== Patch recovery.fstab (root/system/etc/recovery.fstab) =="
           RFSTAB=recovery/root/system/etc/recovery.fstab
           # Hapus baris mount system/cust(vendor) lama yang bersifat statis
           sed -i '/\/by-name\/system\s\+\/system/d;/\/by-name\/cust\s\+\/vendor/d' "$RFSTAB"
 
-          # Entri di bawah disalin persis dari rootdir/etc/fstab.qcom ROM
-          # (Project-Nightcord/android_device_xiaomi_vince, lineage-22.2)
+          # Format ini disalin PERSIS dari merge-fstab.sh milik device tree
+          # TWRP mi8937/msm8937 (arsitektur retrofit dynamic partition yang
+          # sama dengan vince/mi8953, dan SUDAH TERBUKTI BOOT NORMAL):
+          #   for p in system system_ext product vendor odm; do
+          #       echo "${p} /${p} ext4 rw,barrier=1,discard wait,logical"
+          #   done
+          # Beda dari percobaan sebelumnya: TANPA first_stage_mount (itu cuma
+          # relevan buat first-stage init ROM, bukan TWRP), dan rw bukan ro.
           cat >> "$RFSTAB" << 'EOF'
-          system				/system			ext4	ro								wait,logical,first_stage_mount
-          system				/system			erofs	ro								wait,logical,first_stage_mount
-          system_ext			/system_ext		ext4	ro								wait,logical,first_stage_mount
-          system_ext			/system_ext		erofs	ro								wait,logical,first_stage_mount
-          product				/product		ext4	ro								wait,logical,first_stage_mount
-          product				/product		erofs	ro								wait,logical,first_stage_mount
-          vendor				/vendor			ext4	ro								wait,logical,first_stage_mount
-          vendor				/vendor			erofs	ro								wait,logical,first_stage_mount
-          odm				/odm			ext4	ro								wait,logical,first_stage_mount
-          odm				/odm			erofs	ro								wait,logical,first_stage_mount
+          system      /system      ext4    rw,barrier=1,discard    wait,logical
+          system_ext  /system_ext  ext4    rw,barrier=1,discard    wait,logical
+          product     /product     ext4    rw,barrier=1,discard    wait,logical
+          vendor      /vendor      ext4    rw,barrier=1,discard    wait,logical
+          odm         /odm         ext4    rw,barrier=1,discard    wait,logical
           EOF
 
           echo "== Hasil BoardConfig.mk (bagian akhir) =="

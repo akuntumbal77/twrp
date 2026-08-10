@@ -288,8 +288,6 @@ jobs:
 
           # =====================================================================
           # FIX DETEKSI DYNAMIC PARTITION
-          # Gunakan lpdump bawaan TWRP atau cek ketiadaan header ext4 murni
-          # sebagai indikator bahwa partisi fisik system sudah dikonversi jadi super.
           # =====================================================================
           IS_DYNAMIC=false
 
@@ -298,24 +296,31 @@ jobs:
           elif lpdump /dev/block/by-name/system >/dev/null 2>&1; then
               IS_DYNAMIC=true
           elif ! blkid /dev/block/by-name/system | grep -q 'ext4'; then
-              # Jika by-name/system bukan ext4, berarti ia menampung metadata super
               IS_DYNAMIC=true
           fi
 
           if [ "$IS_DYNAMIC" = true ]; then
-              # Dynamic partition terdeteksi
+              # [FIX 1] DYNAMIC: Arahkan logical partition 'system' ke '/system_root'
               cat /system/etc/twrp.flags.dynpart >> /system/etc/twrp.flags
               echo >> /system/etc/recovery.fstab
               for p in system system_ext product vendor odm; do
-                  echo "${p} /${p} ext4 rw,barrier=1,discard wait,logical" >> /system/etc/recovery.fstab
+                  if [ "$p" = "system" ]; then
+                      echo "${p} /system_root ext4 rw,barrier=1,discard wait,logical" >> /system/etc/recovery.fstab
+                  else
+                      echo "${p} /${p} ext4 rw,barrier=1,discard wait,logical" >> /system/etc/recovery.fstab
+                  fi
               done
               echo >> /system/etc/twrp.flags
               for p in cust; do
                   echo "/super_${p} emmc /dev/block/by-name/${p} flags=display=\"Super_${p}\";backup=1" >> /system/etc/twrp.flags
               done
           else
-              # Non-dynamic (skema statis lama, fallback)
+              # [FIX 2] NON-DYNAMIC: Wajib daftarkan mount point utama ke recovery.fstab untuk fs_mgr
               cat /system/etc/twrp.flags.nondynpart >> /system/etc/twrp.flags
+              echo >> /system/etc/recovery.fstab
+              echo "/dev/block/bootdevice/by-name/system /system_root ext4 rw,barrier=1,discard wait" >> /system/etc/recovery.fstab
+              echo "/dev/block/bootdevice/by-name/cust /vendor ext4 rw,barrier=1,discard wait" >> /system/etc/recovery.fstab
+    
               echo >> /system/etc/twrp.flags
               echo "/super emmc /dev/block/by-name/system flags=display=\"Super\";backup=1" >> /system/etc/twrp.flags
               for p in cust; do

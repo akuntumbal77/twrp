@@ -277,6 +277,33 @@ jobs:
           echo >> /system/etc/recovery.fstab
           echo >> /system/etc/twrp.flags
 
+          # =====================================================================
+          # FIX: symlink kompatibilitas /dev/block/by-name/super
+          #
+          # ROOT CAUSE (confirmed dari recovery.log): vince TIDAK punya partisi
+          # fisik GPT bernama literal "super" - hanya "system" dan "cust". Tapi
+          # updater-binary ROM (native liblp: FlashPartitionTable/ReadMetadata)
+          # HARDCODE manggil fs_mgr_get_super_partition_name() yang defaultnya
+          # balikin string literal "super", lalu langsung open()
+          # "/dev/block/by-name/super". Karena symlink itu memang tidak pernah
+          # dibuat ueventd (nama partisi GPT-nya bukan "super"), open() gagal:
+          #   "[liblp] ReadMetadata open failed: /dev/block/by-name/super:
+          #    No such file or directory"
+          #   "assert failed: update_dynamic_partitions(...)"
+          #
+          # Entry /super & /super_cust yang muncul di twrp.fstab/twrp.flags itu
+          # CUMA mount point kosmetik buatan TWRP sendiri (buat UI backup),
+          # bukan symlink kernel asli - jadi tidak menolong updater ROM.
+          #
+          # FIX: buat symlink asli /dev/block/by-name/super -> by-name/system,
+          # karena BOARD_SUPER_PARTITION_METADATA_DEVICE := system (device
+          # yang jadi tempat metadata dynamic partition ditulis). Symlink ini
+          # dibuat SELALU (regardless dynpart terdeteksi atau belum) supaya
+          # aman dipakai updater kapan saja. Dangling symlink aman - di-resolve
+          # belakangan saat by-name/system sudah kebentuk oleh ueventd.
+          # =====================================================================
+          ln -sf /dev/block/by-name/system /dev/block/by-name/super
+
           if dd if=/dev/block/by-name/system bs=256k count=1 2>/dev/null | strings | grep -q mi8953_dynpart; then
               # Dynamic partition terdeteksi
               cat /system/etc/twrp.flags.dynpart >> /system/etc/twrp.flags

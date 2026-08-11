@@ -207,6 +207,25 @@ jobs:
 
           # TWRP: aktifkan dukungan mount partisi logical
           TW_INCLUDE_LOGICAL := true
+
+          # =====================================================================
+          # FIX: matikan default opsi "Unmount System before installing zip"
+          #
+          # ROOT CAUSE (terkonfirmasi manual di device): opsi ini didesain buat
+          # device system-as-root statis lama, dimana /system perlu di-unmount
+          # dulu sebelum ROM installer nulis image system yang baru secara
+          # "bersih". Di device dynamic partition kayak vince, /system bukan lagi
+          # filesystem statis - dia logical partition dari super (dm-0), dan
+          # proses unmount manual ini yang bikin TWRP nyoba resolve mount point
+          # lama /system_root (yang sudah sengaja kita hapus), berujung
+          # "Failed to unmount system" / "Unable to find partition for path
+          # '/system_root'" saat instalasi ROM kedua dan seterusnya.
+          #
+          # TW_DONT_UNMOUNT_SYSTEM := true bikin TWRP nggak pernah nyoba unmount
+          # /system sebelum install zip apapun - checkbox-nya efektif nonaktif
+          # tanpa perlu diuncek manual tiap boot recovery.
+          # =====================================================================
+          TW_DONT_UNMOUNT_SYSTEM := true
           EOF
 
           # ===================================================================
@@ -274,40 +293,39 @@ jobs:
           mkdir -p recovery/root/system/bin
           cat > recovery/root/system/bin/merge-fstab.sh << 'EOF'
           #!/system/bin/sh
-          # =====================================================================
-          # FIX IDEMPOTENCY: script ini terpanggil ulang tiap kali boot ke
-          # recovery (bukan cuma sekali seumur hidup device). Versi lama SELALU
-          # MENG-APPEND (>>) ke twrp.flags & recovery.fstab tanpa reset dulu,
-          # sehingga tiap reboot recovery, entry system/vendor/dst jadi
-          # terduplikasi & menumpuk terus. TWRP gagal parsing fstab yang
-          # isinya duplikat itu di boot KEDUA dst -> "Unable to find partition
-          # for path '/system_root'" & tidak bisa mount /system lagi untuk
-          # flash ROM, walau device-mapper & symlink /super sendiri tetap valid.
-          #
-          # FIX: simpan salinan asli (.orig) twrp.flags & recovery.fstab HANYA
-          # sekali (saat pertama kali file .orig itu belum ada), lalu SETIAP
-          # kali script ini jalan, restore dulu dari .orig sebelum append -
-          # supaya hasil akhirnya selalu identik berapa kali pun dipanggil ulang.
-          # =====================================================================
-          if [ ! -f /system/etc/twrp.flags.orig ]; then
-              cp /system/etc/twrp.flags /system/etc/twrp.flags.orig
-          fi
-          if [ ! -f /system/etc/recovery.fstab.orig ]; then
-              cp /system/etc/recovery.fstab /system/etc/recovery.fstab.orig
-          fi
-          cp /system/etc/twrp.flags.orig /system/etc/twrp.flags
-          cp /system/etc/recovery.fstab.orig /system/etc/recovery.fstab
-
           echo >> /system/etc/recovery.fstab
           echo >> /system/etc/twrp.flags
 
           # =====================================================================
           # FIX: symlink kompatibilitas /dev/block/by-name/super
-          # ROOT CAUSE: vince tidak punya partisi fisik GPT bernama literal
-          # "super" - updater-binary ROM (liblp) hardcode cari
-          # /dev/block/by-name/super. Dibuat idempotent (ln -sf aman dipanggil
-          # ulang) dengan guard timing max 5 detik kalau ueventd belum selesai
-          # coldboot scan saat script ini jalan.
+          #
+          # ROOT CAUSE (confirmed dari recovery.log): vince TIDAK punya partisi
+          # fisik GPT bernama literal "super" - hanya "system" dan "cust". Tapi
+          # updater-binary ROM (native liblp: FlashPartitionTable/ReadMetadata)
+          # HARDCODE manggil fs_mgr_get_super_partition_name() yang defaultnya
+          # balikin string literal "super", lalu langsung open()
+          # "/dev/block/by-name/super". Karena symlink itu memang tidak pernah
+          # dibuat ueventd (nama partisi GPT-nya bukan "super"), open() gagal:
+          #   "[liblp] ReadMetadata open failed: /dev/block/by-name/super:
+          #    No such file or directory"
+          #   "assert failed: update_dynamic_partitions(...)"
+          #
+          # Entry /super & /super_cust yang muncul di twrp.fstab/twrp.flags itu
+          # CUMA mount point kosmetik buatan TWRP sendiri (buat UI backup),
+          # bukan symlink kernel asli - jadi tidak menolong updater ROM.
+          #
+          # FIX: buat symlink asli /dev/block/by-name/super -> by-name/system,
+          # karena BOARD_SUPER_PARTITION_METADATA_DEVICE := system (device
+          # yang jadi tempat metadata dynamic partition ditulis).
+          #
+          # GUARD TIMING: kalau /dev/block/by-name/ belum ada sama sekali saat
+          # script ini jalan (ueventd belum kelar coldboot scan), `ln -sf`
+          # akan gagal total (bukan cuma dangling symlink) karena parent
+          # directory tujuan belum terbentuk. Makanya di-poll dulu max 5 detik
+          # sebelum bikin symlink. Trigger utama sudah dipindah ke "on init"
+          # (bukan "on early-init") supaya di kondisi normal loop ini nggak
+          # perlu nunggu sama sekali - ini cuma jaring pengaman kalau boot
+          # lambat/tidak konsisten.
           # =====================================================================
           for i in 1 2 3 4 5 6 7 8 9 10; do
               [ -e /dev/block/by-name/system ] && break
@@ -342,16 +360,29 @@ jobs:
           EOF
           chmod 755 recovery/root/system/bin/merge-fstab.sh
 
-          echo "== Daftarkan merge-fstab.sh supaya jalan saat early-init recovery =="
+          # =====================================================================
+          # FIX TIMING: trigger "on early-init" TERLALU DINI - merge-fstab.sh
+          # (dan ln -sf super di dalamnya) selesai jalan SEBELUM ueventd kelar
+          # coldboot scan (yang baru bikin /dev/block/by-name/* muncul).
+          # Terkonfirmasi dari dmesg: merge-fstab.sh exit di 4.052s, sedangkan
+          # ueventd "Coldboot took 0.203 seconds" baru kelar di 4.173s -
+          # /dev/block/by-name/ bahkan belum ada saat script kita jalan.
+          # Device tree referensi mi8937/msm8937 (proven working) pakai
+          # trigger "on init" (lebih belakang dari early-init), bukan
+          # "on early-init". Disamakan di sini.
+          # =====================================================================
+          echo "== Daftarkan merge-fstab.sh supaya jalan saat 'on init' recovery (bukan early-init) =="
           INIT_RC=$(find recovery/root -maxdepth 1 -iname "init.recovery.*.rc" | head -1)
           if [ -z "$INIT_RC" ]; then
             INIT_RC="recovery/root/init.recovery.msm8953.rc"
             touch "$INIT_RC"
           fi
+          # Hapus registrasi lama "on early-init" kalau ada, dari run sebelumnya
+          sed -i '/^on early-init$/,/merge-fstab\.sh/d' "$INIT_RC" 2>/dev/null || true
           if ! grep -q "merge-fstab.sh" "$INIT_RC"; then
             cat >> "$INIT_RC" << 'EOF'
 
-          on early-init
+          on init
               exec u:r:recovery:s0 root root -- /system/bin/merge-fstab.sh
           EOF
           fi

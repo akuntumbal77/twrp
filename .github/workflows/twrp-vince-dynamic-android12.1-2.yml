@@ -221,11 +221,15 @@ jobs:
           # "Failed to unmount system" / "Unable to find partition for path
           # '/system_root'" saat instalasi ROM kedua dan seterusnya.
           #
-          # TW_DONT_UNMOUNT_SYSTEM := true bikin TWRP nggak pernah nyoba unmount
-          # /system sebelum install zip apapun - checkbox-nya efektif nonaktif
-          # tanpa perlu diuncek manual tiap boot recovery.
+          # KOREKSI: nama flag yang BENAR dan dikenali Android.mk adalah
+          # TW_NEVER_UNMOUNT_SYSTEM (bukan TW_DONT_UNMOUNT_SYSTEM - itu cuma
+          # nama variabel internal C++ di partition.cpp, TIDAK ada rule di
+          # Android.mk yang mem-forward BoardConfig var itu ke -D flag, jadi
+          # sebelumnya efeknya nol / checkbox tetap kecentang). Ini flag resmi
+          # yang di-compile jadi -DTW_NEVER_UNMOUNT_SYSTEM, bikin TWRP nggak
+          # pernah unmount /system - checkbox jadi efektif nonaktif permanen.
           # =====================================================================
-          TW_DONT_UNMOUNT_SYSTEM := true
+          TW_NEVER_UNMOUNT_SYSTEM := true
           EOF
 
           # ===================================================================

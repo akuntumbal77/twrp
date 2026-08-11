@@ -580,6 +580,8 @@ jobs:
           # CLEAR OLD GENERATED ENTRIES
           # ============================================================
 
+          mkdir -p /system/etc
+
           touch /system/etc/recovery.fstab
           touch /system/etc/twrp.flags
 

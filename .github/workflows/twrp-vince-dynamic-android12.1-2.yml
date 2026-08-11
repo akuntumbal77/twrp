@@ -24,7 +24,7 @@ jobs:
           docker-images: true
           
       - name: Free Disk Space
-        uses: endersonmenezes/free-disk-space@v3  # Use @main for latest, @v3 for stable
+        uses: endersonmenezes/free-disk-space@v3
         with:
           remove_android: true
           remove_dotnet: true
@@ -34,8 +34,8 @@ jobs:
           remove_packages: "azure-cli google-cloud-cli microsoft-edge-stable google-chrome-stable firefox postgresql* temurin-* *llvm* mysql* dotnet-sdk-*"
           remove_packages_one_command: true
           remove_folders: "/usr/share/swift /usr/share/miniconda /usr/share/az* /usr/local/lib/node_modules /usr/local/share/chromium /usr/local/share/powershell /usr/local/julia /usr/local/aws-cli /usr/local/aws-sam-cli /usr/share/gradle"
-          rm_cmd: "rm"  # Use 'rmz' for faster deletion (default: 'rm')
-          rmz_version: "3.1.1"  # Required when rm_cmd is 'rmz'
+          rm_cmd: "rm"
+          rmz_version: "3.1.1"
           testing: false
 
       - name: Check Disk Space (after reclaim)
@@ -131,14 +131,6 @@ jobs:
             device/xiaomi/vince \
             2>&1 | tee -a /tmp/full_build.log
 
-      # =====================================================================
-      # GANTI KERNEL PREBUILT: kernel bawaan device tree vince (4.9.291)
-      # TERBUKTI tidak support MADV_WIPEONFORK & kemungkinan besar tidak
-      # lengkap driver dynamic-partition (device-mapper), menyebabkan
-      # updater ROM Lunaris crash SIGABRT saat inisialisasi arc4random.
-      # Diganti dengan kernel 4.19 khusus vince/mi8953/msm8953 yang sudah
-      # support ROM retrofit dynamic partition.
-      # =====================================================================
       - name: Replace Prebuilt Kernel (4.19, fix MADV_WIPEONFORK / dynamic partition support)
         run: |
           cd twrp/device/xiaomi/vince
@@ -155,21 +147,9 @@ jobs:
           sed -i 's/^TARGET_KERNEL_VERSION := .*/TARGET_KERNEL_VERSION := 4.19/' BoardConfig.mk
           grep -n "^TARGET_KERNEL_VERSION" BoardConfig.mk
 
-          # CATATAN: kernel cmdline / base address / offset TIDAK diubah di
-          # sini karena device fisik & bootloader vince/mi8953 sama persis
-          # antara kernel 4.9 dan 4.19 (cuma kernel space yang beda versi).
-          # Kalau boot gagal total (bukan cuma gagal install ROM), kemungkinan
-          # BOARD_KERNEL_BASE/BOARD_KERNEL_PAGESIZE/BOARD_KERNEL_TAGS_OFFSET
-          # perlu disesuaikan juga - itu tanda kernel 4.19 ini pakai konfigurasi
-          # mkbootimg yang beda dari yang di-assume BoardConfig.mk sekarang.
           echo "== BOARD_KERNEL_* saat ini (untuk referensi debug kalau boot gagal) =="
           grep "^BOARD_KERNEL_" BoardConfig.mk
 
-      # =====================================================================
-      # PENTING: Nilai BOARD_SUPER_PARTITION_SIZE di bawah ini disalin persis
-      # dari BoardConfig.mk device tree ROM (Project-Nightcord/android_device_xiaomi_vince,
-      # branch lineage-22.2). Kalau ROM kamu ganti, cek ulang nilai ini.
-      # =====================================================================
       - name: Patch Device Tree for Dynamic Partition (Super) Support
         run: |
           cd twrp/device/xiaomi/vince
@@ -181,10 +161,6 @@ jobs:
           cat >> BoardConfig.mk << 'EOF'
 
           # ==== Dynamic Partitions (retrofit super) - vince/mi8953 ====
-          # Nilai di bawah disalin persis dari BoardConfig.mk device tree ROM
-          # (Project-Nightcord/android_device_xiaomi_vince, branch lineage-22.2).
-          # Device ini TIDAK punya partisi fisik "super" tersendiri - metadata
-          # dynamic partition menumpang di partisi fisik lama "cust" dan "system".
           BOARD_SUPER_PARTITION_BLOCK_DEVICES := cust system
           BOARD_SUPER_PARTITION_METADATA_DEVICE := system
           BOARD_SUPER_PARTITION_CUST_DEVICE_SIZE := 536870912
@@ -207,54 +183,7 @@ jobs:
 
           # TWRP: aktifkan dukungan mount partisi logical
           TW_INCLUDE_LOGICAL := true
-
-          # =====================================================================
-          # FIX: matikan default opsi "Unmount System before installing zip"
-          #
-          # ROOT CAUSE (terkonfirmasi manual di device): opsi ini didesain buat
-          # device system-as-root statis lama, dimana /system perlu di-unmount
-          # dulu sebelum ROM installer nulis image system yang baru secara
-          # "bersih". Di device dynamic partition kayak vince, /system bukan lagi
-          # filesystem statis - dia logical partition dari super (dm-0), dan
-          # proses unmount manual ini yang bikin TWRP nyoba resolve mount point
-          # lama /system_root (yang sudah sengaja kita hapus), berujung
-          # "Failed to unmount system" / "Unable to find partition for path
-          # '/system_root'" saat instalasi ROM kedua dan seterusnya.
-          #
-          # KOREKSI: nama flag yang BENAR dan dikenali Android.mk adalah
-          # TW_NEVER_UNMOUNT_SYSTEM (bukan TW_DONT_UNMOUNT_SYSTEM - itu cuma
-          # nama variabel internal C++ di partition.cpp, TIDAK ada rule di
-          # Android.mk yang mem-forward BoardConfig var itu ke -D flag, jadi
-          # sebelumnya efeknya nol / checkbox tetap kecentang). Ini flag resmi
-          # yang di-compile jadi -DTW_NEVER_UNMOUNT_SYSTEM, bikin TWRP nggak
-          # pernah unmount /system - checkbox jadi efektif nonaktif permanen.
-          # =====================================================================
-          TW_NEVER_UNMOUNT_SYSTEM := true
           EOF
-
-          # ===================================================================
-          # ROOT CAUSE (terkonfirmasi dari analisis pstore log + perbandingan
-          # device tree mi8937/msm8937 yang SUDAH TERBUKTI boot & install ROM
-          # dynamic partition dengan benar):
-          #
-          #   Base twrp.fstab vince (sebelum patch) punya entry STATIS:
-          #     /system          ext4   .../by-name/system   ...
-          #     /system_image    emmc   .../by-name/system   ...
-          #   Installer script ROM dynamic partition (Lunaris dkk) manggil
-          #   map_partition("system") saat instalasi, di-resolve TWRP lewat
-          #   fstab. Karena ada entry /system statis yang salah konteks
-          #   (device ini dynamic partition, bukan statis), TWRP fallback ke
-          #   /system_root yang TIDAK ADA -> error "Unable to find partition
-          #   for path '/system_root'" -> install gagal.
-          #
-          #   Device tree mi8937/msm8937 (referensi yang terbukti bekerja)
-          #   TIDAK PERNAH menaruh /system statis di base twrp.fstab. Mereka
-          #   pakai skema RUNTIME MERGE (merge-fstab.sh): base fstab cuma
-          #   punya /data & /metadata, lalu saat boot recovery, script
-          #   mendeteksi apakah device dynamic partition (baca marker di
-          #   partition system) atau bukan, baru append entry system/vendor/
-          #   dst yang sesuai.
-          # ===================================================================
 
           echo "== [FIX UTAMA] Hapus entry /system & /system_image & /vendor statis dari twrp.fstab =="
           FSTAB=recovery/root/system/etc/twrp.fstab
@@ -268,7 +197,22 @@ jobs:
           echo "== Hasil recovery.fstab base =="
           cat "$RFSTAB"
 
-          echo "== Buat twrp.flags.dynpart (di-append saat runtime kalau device dynamic partition) =="
+          # =====================================================================
+          # SIMPLIFIKASI: device tree ini dibuild KHUSUS untuk 1 ROM dynamic
+          # partition (bukan dual-purpose lama/baru seperti device tree
+          # referensi mi8937/msm8937). Deteksi runtime (dd|strings|grep nama
+          # grup) sebelumnya TERBUKTI TIDAK RELIABLE - dari recovery.log &
+          # dmesg, script itu SELALU jatuh ke branch "nondynpart" (fallback
+          # statis) meskipun ROM-nya jelas dynamic partition, kemungkinan
+          # karena nama grup metadata asli ROM beda dari tebakan
+          # "mi8953_dynpart" yang kita salin dari device lain. Makanya
+          # /system_root kadang ketemu (busy) kadang tidak ketemu sama sekali
+          # tergantung kondisi partisi saat itu - tidak konsisten & rawan.
+          #
+          # FIX: hapus total mekanisme deteksi & branching. LANGSUNG pakai
+          # skema dynamic partition tanpa syarat apapun.
+          # =====================================================================
+          echo "== Buat twrp.flags.dynpart (SELALU dipakai, tanpa deteksi runtime) =="
           cat > recovery/root/system/etc/twrp.flags.dynpart << 'EOF'
           # mount point   fstype  device                      device2                     flags
 
@@ -277,23 +221,7 @@ jobs:
           /metadata       ext4    /dev/block/bootdevice/by-name/logdump                   flags=display="Metadata";fsflags="discard"
           EOF
 
-          echo "== Buat twrp.flags.nondynpart (di-append saat runtime kalau device MASIH statis) =="
-          cat > recovery/root/system/etc/twrp.flags.nondynpart << 'EOF'
-          # mount point   fstype  device                      device2                     flags
-
-          # System (skema lama, statis, non-dynamic partition)
-          /system_root    ext4    /dev/block/bootdevice/by-name/system                    flags=display="System";fsflags="discard";wipeingui
-          /system_image   emmc    /dev/block/bootdevice/by-name/system                    flags=display="System";backup=1;flashimg=1
-          /vendor         ext4    /dev/block/bootdevice/by-name/cust                      flags=display="Vendor";fsflags="discard";wipeingui
-          /vendor_image   emmc    /dev/block/bootdevice/by-name/cust                      flags=display="Vendor";backup=1;flashimg=1
-          /data           ext4    /dev/block/bootdevice/by-name/userdata                  flags=encryptable=footer;fsflags="discard"
-          /metadata       ext4    /dev/block/bootdevice/by-name/logdump                   flags=display="Metadata";fsflags="discard"
-          EOF
-
-          echo "== Buat merge-fstab.sh (dijalankan saat init recovery, deteksi dynpart runtime) =="
-          # Diadaptasi PERSIS dari device tree mi8937/msm8937 (referensi yang
-          # sudah terbukti bekerja), marker diganti ke mi8953_dynpart sesuai
-          # BOARD_SUPER_PARTITION_GROUPS milik vince.
+          echo "== Buat merge-fstab.sh (SELALU pakai skema dynamic partition, tanpa deteksi) =="
           mkdir -p recovery/root/system/bin
           cat > recovery/root/system/bin/merge-fstab.sh << 'EOF'
           #!/system/bin/sh
@@ -301,87 +229,47 @@ jobs:
           echo >> /system/etc/twrp.flags
 
           # =====================================================================
-          # FIX: symlink kompatibilitas /dev/block/by-name/super
+          # PERCOBAAN: symlink /dev/block/by-name/super DIHAPUS.
           #
-          # ROOT CAUSE (confirmed dari recovery.log): vince TIDAK punya partisi
-          # fisik GPT bernama literal "super" - hanya "system" dan "cust". Tapi
-          # updater-binary ROM (native liblp: FlashPartitionTable/ReadMetadata)
-          # HARDCODE manggil fs_mgr_get_super_partition_name() yang defaultnya
-          # balikin string literal "super", lalu langsung open()
-          # "/dev/block/by-name/super". Karena symlink itu memang tidak pernah
-          # dibuat ueventd (nama partisi GPT-nya bukan "super"), open() gagal:
-          #   "[liblp] ReadMetadata open failed: /dev/block/by-name/super:
-          #    No such file or directory"
-          #   "assert failed: update_dynamic_partitions(...)"
+          # Sebelumnya kita buat symlink manual /dev/block/by-name/super ->
+          # by-name/system, dengan asumsi updater-binary hardcode nyari nama
+          # "super". Tapi dari logcat terbaru, liblp gagal baca metadata saat
+          # boot KEDUA (setelah ROM dipakai sekali):
+          #   "[liblp]Logical partition metadata has invalid geometry magic
+          #    signature." / "Could not read partition table."
           #
-          # Entry /super & /super_cust yang muncul di twrp.fstab/twrp.flags itu
-          # CUMA mount point kosmetik buatan TWRP sendiri (buat UI backup),
-          # bukan symlink kernel asli - jadi tidak menolong updater ROM.
-          #
-          # FIX: buat symlink asli /dev/block/by-name/super -> by-name/system,
-          # karena BOARD_SUPER_PARTITION_METADATA_DEVICE := system (device
-          # yang jadi tempat metadata dynamic partition ditulis).
-          #
-          # GUARD TIMING: kalau /dev/block/by-name/ belum ada sama sekali saat
-          # script ini jalan (ueventd belum kelar coldboot scan), `ln -sf`
-          # akan gagal total (bukan cuma dangling symlink) karena parent
-          # directory tujuan belum terbentuk. Makanya di-poll dulu max 5 detik
-          # sebelum bikin symlink. Trigger utama sudah dipindah ke "on init"
-          # (bukan "on early-init") supaya di kondisi normal loop ini nggak
-          # perlu nunggu sama sekali - ini cuma jaring pengaman kalau boot
-          # lambat/tidak konsisten.
+          # BOARD_SUPER_PARTITION_METADATA_DEVICE := system SUDAH benar di
+          # BoardConfig.mk (dicek ulang, 100% sama dgn BoardConfig.mk ROM
+          # asli) - TWRP seharusnya otomatis tahu baca metadata dari "system"
+          # tanpa perlu symlink apapun. Dugaan sekarang: symlink "super" ini
+          # yang membuat sebagian komponen (liblp/update_engine) baca metadata
+          # HANYA dari partition "system" sendirian, padahal layoutnya
+          # retrofit gabungan cust+system - hasilnya metadata kebaca
+          # tidak lengkap/rusak. Dihapus dulu sebagai percobaan.
           # =====================================================================
-          for i in 1 2 3 4 5 6 7 8 9 10; do
-              [ -e /dev/block/by-name/system ] && break
-              sleep 0.5
-          done
-          if [ -e /dev/block/by-name/system ]; then
-              ln -sf /dev/block/by-name/system /dev/block/by-name/super
-          else
-              echo "merge-fstab.sh: WARNING /dev/block/by-name/system belum ada setelah nunggu 5 detik, symlink super gagal dibuat" 1>&2
-          fi
 
-          if dd if=/dev/block/by-name/system bs=256k count=1 2>/dev/null | strings | grep -q mi8953_dynpart; then
-              # Dynamic partition terdeteksi
-              cat /system/etc/twrp.flags.dynpart >> /system/etc/twrp.flags
-              echo >> /system/etc/recovery.fstab
-              for p in system system_ext product vendor odm; do
-                  echo "${p} /${p} ext4 rw,barrier=1,discard wait,logical" >> /system/etc/recovery.fstab
-              done
-              echo >> /system/etc/twrp.flags
-              for p in cust; do
-                  echo "/super_${p} emmc /dev/block/by-name/${p} flags=display=\"Super_${p}\";backup=1" >> /system/etc/twrp.flags
-              done
-          else
-              # Non-dynamic (skema statis lama, fallback)
-              cat /system/etc/twrp.flags.nondynpart >> /system/etc/twrp.flags
-              echo >> /system/etc/twrp.flags
-              echo "/super emmc /dev/block/by-name/system flags=display=\"Super\";backup=1" >> /system/etc/twrp.flags
-              for p in cust; do
-                  echo "/super_${p} emmc /dev/block/by-name/${p} flags=display=\"Super_${p}\";backup=1" >> /system/etc/twrp.flags
-              done
-          fi
+          # LANGSUNG pakai skema dynamic partition - TANPA deteksi runtime
+          # (deteksi sebelumnya terbukti tidak reliable, lihat catatan di
+          # workflow yml).
+          cat /system/etc/twrp.flags.dynpart >> /system/etc/twrp.flags
+          echo >> /system/etc/recovery.fstab
+          for p in system system_ext product vendor odm; do
+              echo "${p} /${p} ext4 rw,barrier=1,discard wait,logical" >> /system/etc/recovery.fstab
+          done
+          echo >> /system/etc/twrp.flags
+          echo "/super emmc /dev/block/by-name/system flags=display=\"Super\";backup=1" >> /system/etc/twrp.flags
+          for p in cust; do
+              echo "/super_${p} emmc /dev/block/by-name/${p} flags=display=\"Super_${p}\";backup=1" >> /system/etc/twrp.flags
+          done
           EOF
           chmod 755 recovery/root/system/bin/merge-fstab.sh
 
-          # =====================================================================
-          # FIX TIMING: trigger "on early-init" TERLALU DINI - merge-fstab.sh
-          # (dan ln -sf super di dalamnya) selesai jalan SEBELUM ueventd kelar
-          # coldboot scan (yang baru bikin /dev/block/by-name/* muncul).
-          # Terkonfirmasi dari dmesg: merge-fstab.sh exit di 4.052s, sedangkan
-          # ueventd "Coldboot took 0.203 seconds" baru kelar di 4.173s -
-          # /dev/block/by-name/ bahkan belum ada saat script kita jalan.
-          # Device tree referensi mi8937/msm8937 (proven working) pakai
-          # trigger "on init" (lebih belakang dari early-init), bukan
-          # "on early-init". Disamakan di sini.
-          # =====================================================================
-          echo "== Daftarkan merge-fstab.sh supaya jalan saat 'on init' recovery (bukan early-init) =="
+          echo "== Daftarkan merge-fstab.sh supaya jalan saat 'on init' recovery =="
           INIT_RC=$(find recovery/root -maxdepth 1 -iname "init.recovery.*.rc" | head -1)
           if [ -z "$INIT_RC" ]; then
             INIT_RC="recovery/root/init.recovery.msm8953.rc"
             touch "$INIT_RC"
           fi
-          # Hapus registrasi lama "on early-init" kalau ada, dari run sebelumnya
           sed -i '/^on early-init$/,/merge-fstab\.sh/d' "$INIT_RC" 2>/dev/null || true
           if ! grep -q "merge-fstab.sh" "$INIT_RC"; then
             cat >> "$INIT_RC" << 'EOF'
@@ -404,15 +292,8 @@ jobs:
       - name: Increase Kernel/Recovery Log Verbosity (for debugging)
         run: |
           cd twrp/device/xiaomi/vince
-          # Naikkan verbosity dmesg kernel supaya error mount dynamic partition
-          # (liblp/fs_mgr) kelihatan jelas lewat `adb shell dmesg` saat di recovery.
-          # Ini cuma nambah opsi di cmdline (dibakar ke header boot image saat
-          # mkbootimg), TIDAK perlu rebuild kernel.
           sed -i 's/^BOARD_KERNEL_CMDLINE := /BOARD_KERNEL_CMDLINE := printk.devkmsg=on loglevel=8 /' BoardConfig.mk
           grep "^BOARD_KERNEL_CMDLINE" BoardConfig.mk
-
-          # Pastikan logcat & logd aktif (dibutuhkan supaya `adb shell logcat`
-          # bisa dipakai buat lihat error mount/init dari recovery)
           grep -q "^TWRP_INCLUDE_LOGCAT" BoardConfig.mk || echo "TWRP_INCLUDE_LOGCAT := true" >> BoardConfig.mk
           grep -q "^TARGET_USES_LOGD" BoardConfig.mk || echo "TARGET_USES_LOGD := true" >> BoardConfig.mk
 
@@ -543,11 +424,10 @@ jobs:
         run: |
           mkdir -p debug-info
           OUT=out/target/product/vince/recovery/root/system/etc
-          # File FINAL yang beneran masuk ramdisk recovery, buat dibandingkan
-          # sama file yang kita patch manual - kalau beda, artinya ada step
-          # build system yang overwrite/generate ulang.
-          cp -v "$OUT/twrp.fstab" debug-info/twrp.fstab.final 2>/dev/null || echo "twrp.fstab.final: tidak ditemukan (build mungkin gagal sebelum tahap ini)" > debug-info/twrp.fstab.final
+          cp -v "$OUT/twrp.fstab" debug-info/twrp.fstab.final 2>/dev/null || echo "twrp.fstab.final: tidak ditemukan" > debug-info/twrp.fstab.final
           cp -v "$OUT/recovery.fstab" debug-info/recovery.fstab.final 2>/dev/null || echo "recovery.fstab.final: tidak ditemukan" > debug-info/recovery.fstab.final
+          cp -v "$OUT/twrp.flags.dynpart" debug-info/twrp.flags.dynpart.final 2>/dev/null || true
+          cp -v device/xiaomi/vince/recovery/root/system/bin/merge-fstab.sh debug-info/merge-fstab.sh.used 2>/dev/null || true
           cp -v device/xiaomi/vince/BoardConfig.mk debug-info/BoardConfig.mk.used 2>/dev/null || true
           echo "Build finished at $(date)" > debug-info/build-meta.txt
           echo "TARGET_PRODUCT=twrp_vince" >> debug-info/build-meta.txt

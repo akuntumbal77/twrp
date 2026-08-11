@@ -1,3 +1,277 @@
+name: twrp-vince-dynamic-android12.1
+
+on:
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+
+      # ============================================================
+      # FREE DISK
+      # ============================================================
+
+      - name: Free Disk Space (Ubuntu)
+        uses: insightsengineering/disk-space-reclaimer@v1
+        with:
+          tools-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+          docker-images: true
+
+      - name: Free Disk Space
+        uses: endersonmenezes/free-disk-space@v3
+        with:
+          remove_android: true
+          remove_dotnet: true
+          remove_haskell: true
+          remove_tool_cache: true
+          remove_swap: true
+          remove_packages: "azure-cli google-cloud-cli microsoft-edge-stable google-chrome-stable firefox postgresql* temurin-* *llvm* mysql* dotnet-sdk-*"
+          remove_packages_one_command: true
+          remove_folders: "/usr/share/swift /usr/share/miniconda /usr/share/az* /usr/local/lib/node_modules /usr/local/share/chromium /usr/local/share/powershell /usr/local/julia /usr/local/aws-cli /usr/local/aws-sam-cli /usr/share/gradle"
+          rm_cmd: "rm"
+          rmz_version: "3.1.1"
+          testing: false
+
+      - name: Check Disk Space
+        run: |
+          echo "===== DISK SPACE ====="
+          df -h
+          echo "======================"
+
+      - name: Set Swap Space
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 2
+
+      # ============================================================
+      # CHECKOUT
+      # ============================================================
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ============================================================
+      # TELEGRAM - BUILD STARTED
+      # ============================================================
+
+      - name: Notify Telegram - Build Started
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          BUILD_DATE=$(date +"%Y-%m-%d %H:%M:%S UTC")
+
+          curl -s -X POST \
+            "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            -d parse_mode="Markdown" \
+            --data-urlencode \
+            "text=🔨 *TWRP Build Started*
+
+          📱 *Device:* Xiaomi Redmi 5 Plus (vince)
+          🧩 *Platform:* mi8953 / MSM8953
+          🌿 *Branch:* twrp-12.1
+          💾 *Mode:* Retrofit Dynamic Partition
+          🕒 *Time:* ${BUILD_DATE}
+
+          🔗 [GitHub Actions](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+
+      # ============================================================
+      # PACKAGES
+      # ============================================================
+
+      - name: Install Packages
+        run: |
+          set -e
+
+          sudo apt-get update -y 2>&1 | tee -a /tmp/full_build.log
+
+          sudo apt-get install -y --no-install-recommends \
+            git \
+            curl \
+            wget \
+            zip \
+            unzip \
+            cpio \
+            bzip2 \
+            zstd \
+            lzop \
+            make \
+            python3 \
+            bc \
+            flex \
+            bison \
+            gperf \
+            gawk \
+            libxml2-utils \
+            xsltproc \
+            libssl-dev \
+            build-essential \
+            ccache \
+            file \
+            rsync \
+            lz4 \
+            simg2img \
+            e2fsprogs \
+            android-sdk-libsparse-utils \
+            2>&1 | tee -a /tmp/full_build.log
+
+      # ============================================================
+      # REPO TOOL
+      # ============================================================
+
+      - name: Setup Repo Tool
+        run: |
+          set -e
+
+          git config --global user.name "RahmatSobrian"
+          git config --global user.email "build@relife.local"
+          git config --global color.ui false
+
+          mkdir -p "${HOME}/bin"
+
+          curl -L \
+            -o "${HOME}/bin/repo" \
+            https://storage.googleapis.com/git-repo-downloads/repo
+
+          chmod a+x "${HOME}/bin/repo"
+
+          # Memastikan ${HOME}/bin terbaca dengan benar di environment step selanjutnya
+          echo "${HOME}/bin" >> "${GITHUB_PATH}"
+          export PATH="${HOME}/bin:${PATH}"
+
+          repo --version | tee -a /tmp/full_build.log
+
+      # ============================================================
+      # TELEGRAM - SYNC
+      # ============================================================
+
+      - name: Notify Telegram - Syncing Sources
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          curl -s -X POST \
+            "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            -d parse_mode="Markdown" \
+            --data-urlencode \
+            "text=🔄 *Syncing TWRP Sources...*
+
+          📦 Manifest: minimal-manifest-twrp
+          🌿 Branch: twrp-12.1
+          ⚙️ Please wait..."
+
+      # ============================================================
+      # INIT + SYNC
+      # ============================================================
+
+      - name: Init & Sync TWRP Manifest
+        run: |
+          set -e
+
+          export PATH="${HOME}/bin:${PATH}"
+
+          mkdir -p twrp
+          cd twrp
+
+          repo init \
+            --depth=1 \
+            --groups=default,-mips,-x86,-darwin \
+            -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
+            -b twrp-12.1 \
+            2>&1 | tee -a /tmp/full_build.log
+
+          repo sync \
+            -j"$(nproc --all)" \
+            --force-sync \
+            --no-clone-bundle \
+            --no-tags \
+            --optimized-fetch \
+            --prune \
+            2>&1 | tee -a /tmp/full_build.log
+
+          rm -rf .repo
+
+          echo "===== DISK AFTER REPO SYNC ====="
+          df -h | tee -a /tmp/full_build.log
+
+      # ============================================================
+      # DEVICE TREE
+      # ============================================================
+
+      - name: Clone Device Tree (vince)
+        run: |
+          set -e
+
+          cd twrp
+
+          mkdir -p device/xiaomi
+
+          git clone \
+            --depth=1 \
+            -b android-12.1 \
+            https://github.com/Project-Nightcord/twrp_device_xiaomi_vince.git \
+            device/xiaomi/vince \
+            2>&1 | tee -a /tmp/full_build.log
+
+      # ============================================================
+      # REPLACE PREBUILT KERNEL
+      # ============================================================
+
+      - name: Replace Prebuilt Kernel
+        run: |
+          set -e
+
+          cd twrp/device/xiaomi/vince
+
+          echo "========================================"
+          echo " Download custom kernel 4.19"
+          echo "========================================"
+
+          mkdir -p prebuilt
+
+          curl -L \
+            -o prebuilt/Image.gz-dtb \
+            "https://github.com/rahmatsobrian/dummy/raw/refs/heads/main/Image.gz-dtb"
+
+          echo "===== KERNEL FILE ====="
+
+          ls -lh prebuilt/Image.gz-dtb
+
+          file prebuilt/Image.gz-dtb || true
+
+          echo "===== TARGET KERNEL VERSION ====="
+
+          grep -n "^TARGET_KERNEL_VERSION" BoardConfig.mk || true
+
+          sed -i \
+            's/^TARGET_KERNEL_VERSION := .*/TARGET_KERNEL_VERSION := 4.19/' \
+            BoardConfig.mk
+
+          echo "===== AFTER PATCH ====="
+
+          grep -n "^TARGET_KERNEL_VERSION" BoardConfig.mk || true
+
+          echo "===== BOARD KERNEL CONFIG ====="
+
+          grep "^BOARD_KERNEL_" BoardConfig.mk || true
+
+      # ============================================================
+      # PATCH DEVICE TREE
+      # ============================================================
+
       - name: Patch Device Tree - Retrofit Dynamic Partition
         run: |
           set -e
@@ -170,3 +444,900 @@
           /metadata ext4 /dev/block/bootdevice/by-name/logdump flags=display="Metadata";fsflags="discard"
 
           EOF
+
+          # ========================================================
+          # MERGE FSTAB SCRIPT
+          # ========================================================
+
+          cat > recovery/root/system/bin/merge-fstab.sh << 'EOF'
+          #!/system/bin/sh
+
+          LOG_TAG="vince-dynpart"
+
+          log_msg()
+          {
+              echo "[${LOG_TAG}] $*"
+          }
+
+          log_msg "Starting dynamic partition detection"
+
+          # ============================================================
+          # WAIT FOR BLOCK DEVICE
+          # ============================================================
+
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+          do
+              if [ -e /dev/block/by-name/system ]; then
+                  break
+              fi
+
+              sleep 0.5
+          done
+
+          # ============================================================
+          # CREATE COMPATIBILITY SYMLINK
+          #
+          # Device has no physical GPT "super".
+          # Physical metadata device = system.
+          #
+          # /dev/block/by-name/super
+          #       ->
+          # /dev/block/by-name/system
+          # ============================================================
+
+          if [ -d /dev/block/by-name ]; then
+
+              if [ -e /dev/block/by-name/system ]; then
+
+                  rm -f /dev/block/by-name/super 2>/dev/null || true
+
+                  ln -s \
+                      /dev/block/by-name/system \
+                      /dev/block/by-name/super \
+                      2>/dev/null || true
+          
+                  log_msg "Created /dev/block/by-name/super -> system"
+          
+              else
+
+                  log_msg "WARNING: system block device not found"
+
+              fi
+
+          else
+
+              log_msg "WARNING: /dev/block/by-name does not exist"
+
+          fi
+
+          # ============================================================
+          # DETECT LOGICAL PARTITIONS
+          #
+          # IMPORTANT:
+          #
+          # ro.boot.dynamic_partitions may be empty.
+          #
+          # We DO NOT use that property.
+          #
+          # We also DO NOT search for arbitrary strings inside system.
+          #
+          # Instead check real device-mapper nodes:
+          #
+          # /dev/block/mapper/system
+          # /dev/block/mapper/vendor
+          # /dev/block/mapper/product
+          # /dev/block/mapper/system_ext
+          # /dev/block/mapper/odm
+          #
+          # This matches the actual vince recovery output.
+          # ============================================================
+
+          DYNAMIC=0
+
+          for i in 1 2 3 4 5 6 7 8 9 10
+          do
+
+              if [ \
+                  -e /dev/block/mapper/system ] && \
+                  [ -e /dev/block/mapper/vendor ] && \
+                  [ -e /dev/block/mapper/product ]
+              ]; then
+
+                  DYNAMIC=1
+                  break
+                    
+              fi
+
+              sleep 0.5
+
+          done
+
+          # ============================================================
+          # SECONDARY CHECK:
+          # DEVICE-MAPPER NAMES
+          # ============================================================
+
+          if [ "$DYNAMIC" = "0" ]; then
+
+              for f in /sys/block/dm-*/dm/name
+              do
+
+                  [ -f "$f" ] || continue
+
+                  NAME=$(cat "$f" 2>/dev/null)
+
+                  case "$NAME" in
+                      system|vendor|product|system_ext|odm)
+                          DYNAMIC=1
+                          ;;
+                  esac
+
+              done
+
+          fi
+
+          # ============================================================
+          # CLEAR OLD GENERATED ENTRIES
+          # ============================================================
+
+          touch /system/etc/recovery.fstab
+          touch /system/etc/twrp.flags
+
+          # Jangan append berulang jika script somehow dipanggil lebih dari sekali.
+          sed -i \
+              '/# VINCE_DYNAMIC_BEGIN/,/# VINCE_DYNAMIC_END/d' \
+              /system/etc/recovery.fstab 2>/dev/null || true
+
+          sed -i \
+              '/# VINCE_DYNAMIC_BEGIN/,/# VINCE_DYNAMIC_END/d' \
+              /system/etc/twrp.flags 2>/dev/null || true
+
+          # ============================================================
+          # DYNAMIC PARTITION
+          # ============================================================
+
+          if [ "$DYNAMIC" = "1" ]; then
+
+              log_msg "Dynamic partition DETECTED"
+
+              cat /system/etc/twrp.flags.dynpart >> /system/etc/twrp.flags
+
+              cat >> /system/etc/recovery.fstab << 'EOF'
+
+          # VINCE_DYNAMIC_BEGIN
+
+          system /system ext4 rw,barrier=1,discard wait,logical
+
+          system_ext /system_ext ext4 rw,barrier=1,discard wait,logical
+
+          product /product ext4 rw,barrier=1,discard wait,logical
+
+          vendor /vendor ext4 rw,barrier=1,discard wait,logical
+
+          odm /odm ext4 rw,barrier=1,discard wait,logical
+
+          # VINCE_DYNAMIC_END
+
+          EOF
+
+              cat >> /system/etc/twrp.flags << 'EOF'
+
+          # VINCE_DYNAMIC_BEGIN
+
+          /super_cust emmc /dev/block/by-name/cust flags=display="Super_cust";backup=1
+
+          # VINCE_DYNAMIC_END
+
+          EOF
+
+          else
+
+          # ========================================================
+          # STATIC FALLBACK
+          # ========================================================
+
+          log_msg "Dynamic partition NOT detected - static fallback"
+
+          cat /system/etc/twrp.flags.nondynpart >> /system/etc/twrp.flags
+
+          cat >> /system/etc/twrp.flags << 'EOF'
+
+          # VINCE_DYNAMIC_BEGIN
+
+          /super emmc /dev/block/by-name/system flags=display="Super";backup=1
+
+          /super_cust emmc /dev/block/by-name/cust flags=display="Super_cust";backup=1
+
+          # VINCE_DYNAMIC_END
+
+          EOF
+
+          fi
+
+          # ============================================================
+          # DEBUG INFORMATION
+          # ============================================================
+
+          log_msg "===== BOOT PROPERTY ====="
+
+          getprop ro.boot.dynamic_partitions 2>/dev/null || true
+
+          log_msg "===== MAPPER ====="
+
+          ls -l /dev/block/mapper 2>/dev/null || true
+
+          log_msg "===== DM NAMES ====="
+
+          for f in /sys/block/dm-*/dm/name
+          do
+              [ -f "$f" ] || continue
+              echo "$f: $(cat "$f" 2>/dev/null)"
+          done
+
+          log_msg "===== BY-NAME ====="
+
+          ls -l /dev/block/by-name 2>/dev/null | \
+              grep -E 'super|system|vendor|product|odm|system_ext|cust' || true
+
+          log_msg "===== RECOVERY FSTAB ====="
+
+          cat /system/etc/recovery.fstab 2>/dev/null || true
+
+          log_msg "===== TWRP FLAGS ====="
+
+          cat /system/etc/twrp.flags 2>/dev/null || true
+
+          log_msg "Dynamic detection result: $DYNAMIC"
+
+          exit 0
+
+          EOF
+
+          chmod 755 recovery/root/system/bin/merge-fstab.sh
+
+          # ========================================================
+          # INIT RC
+          # ========================================================
+
+          INIT_RC=$(find recovery/root \
+            -maxdepth 1 \
+            -type f \
+            -iname "init.recovery.*.rc" \
+            | head -1)
+
+          if [ -z "$INIT_RC" ]; then
+
+            INIT_RC="recovery/root/init.recovery.msm8953.rc"
+
+            touch "$INIT_RC"
+
+          fi
+
+          # Hapus registrasi lama
+          sed -i \
+            '/on early-init$/,/merge-fstab\.sh/d' \
+            "$INIT_RC" 2>/dev/null || true
+
+          sed -i \
+            '/on init$/,/merge-fstab\.sh/d' \
+            "$INIT_RC" 2>/dev/null || true
+
+          # Tambahkan hanya sekali
+          cat >> "$INIT_RC" << 'EOF'
+
+          # ============================================================
+          # VINCE RETROFIT DYNAMIC PARTITION
+          # ============================================================
+
+          on init
+              exec_background u:r:recovery:s0 root root -- /system/bin/merge-fstab.sh
+
+          EOF
+
+          # ========================================================
+          # DEBUG OUTPUT
+          # ========================================================
+
+          echo ""
+          echo "========================================"
+          echo " FINAL BOARD CONFIG"
+          echo "========================================"
+
+          tail -n 60 BoardConfig.mk
+
+          echo ""
+          echo "========================================"
+          echo " FINAL TWRP FSTAB"
+          echo "========================================"
+
+          cat "$FSTAB"
+
+          echo ""
+          echo "========================================"
+          echo " FINAL RECOVERY FSTAB"
+          echo "========================================"
+
+          cat "$RFSTAB"
+
+          echo ""
+          echo "========================================"
+          echo " DYNAMIC FILES"
+          echo "========================================"
+
+          ls -lah \
+            recovery/root/system/etc/twrp.flags.* \
+            recovery/root/system/bin/merge-fstab.sh
+
+          echo ""
+          echo "========================================"
+          echo " INIT RC"
+          echo "========================================"
+
+          cat "$INIT_RC"
+
+      # ============================================================
+      # KERNEL / LOG VERBOSITY
+      # ============================================================
+
+      - name: Increase Recovery Debug Verbosity
+        run: |
+          set -e
+
+          cd twrp/device/xiaomi/vince
+
+          # Hindari duplikasi printk
+          sed -i \
+            's/^BOARD_KERNEL_CMDLINE := printk.devkmsg=on loglevel=8 //' \
+            BoardConfig.mk
+
+          sed -i \
+            's/^BOARD_KERNEL_CMDLINE := /BOARD_KERNEL_CMDLINE := printk.devkmsg=on loglevel=8 /' \
+            BoardConfig.mk
+
+          grep "^BOARD_KERNEL_CMDLINE" BoardConfig.mk || true
+
+          grep -q "^TWRP_INCLUDE_LOGCAT" BoardConfig.mk \
+            || echo "TWRP_INCLUDE_LOGCAT := true" >> BoardConfig.mk
+
+          grep -q "^TARGET_USES_LOGD" BoardConfig.mk \
+            || echo "TARGET_USES_LOGD := true" >> BoardConfig.mk
+
+      # ============================================================
+      # DEVICE VERSION
+      # ============================================================
+
+      - name: Patch TW_DEVICE_VERSION
+        run: |
+          set -e
+
+          cd twrp/device/xiaomi/vince
+
+          if grep -q "^TW_DEVICE_VERSION" BoardConfig.mk; then
+
+            sed -i \
+              's/^TW_DEVICE_VERSION := .*/TW_DEVICE_VERSION := Redmi 5 Plus | RahmatSobrian/' \
+              BoardConfig.mk
+
+          else
+
+            echo "TW_DEVICE_VERSION := Redmi 5 Plus | RahmatSobrian" \
+              >> BoardConfig.mk
+
+          fi
+
+          grep -n "^TW_DEVICE_VERSION" BoardConfig.mk
+
+      # ============================================================
+      # PRE-BUILD DEBUG
+      # ============================================================
+
+      - name: Check Disk Space Before Compile
+        run: |
+          echo "===== DISK ====="
+          df -h
+
+      - name: Show Biggest Folders
+        working-directory: twrp
+        run: |
+          echo "===== TOP 15 FOLDERS ====="
+
+          du -h --max-depth=1 . 2>/dev/null \
+            | sort -rh \
+            | head -15
+
+          echo ""
+          echo "===== TOTAL ====="
+
+          du -sh . 2>/dev/null
+
+      # ============================================================
+      # TELEGRAM - COMPILING
+      # ============================================================
+
+      - name: Notify Telegram - Compiling
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          curl -s -X POST \
+            "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            -d parse_mode="Markdown" \
+            --data-urlencode \
+            "text=⚙️ *Compiling TWRP*
+
+          📱 *Target:* twrp_vince-eng
+          🧩 *Device:* Redmi 5 Plus / vince
+          💾 *Dynamic:* Retrofit Super
+          🧵 *Threads:* $(nproc --all)
+
+          🔨 Build sedang berjalan..."
+
+      # ============================================================
+      # DISK MONITOR
+      # ============================================================
+
+      - name: Start Disk Monitor
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          (
+            ALERTED=false
+
+            while true
+            do
+
+              echo "=== $(date +%H:%M:%S) ===" \
+                >> /tmp/disk_monitor.log
+
+              df -h \
+                >> /tmp/disk_monitor.log
+
+              echo "" \
+                >> /tmp/disk_monitor.log
+
+              USAGE=$(df / | tail -1 | awk '{print $5}' | tr -d '%')
+              AVAIL=$(df -h / | tail -1 | awk '{print $4}')
+
+              if [ "$USAGE" -ge 85 ] && [ "$ALERTED" = false ]; then
+
+                ALERTED=true
+
+                curl -s -X POST \
+                  "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+                  -d chat_id="${TG_CHAT_ID}" \
+                  -d parse_mode="Markdown" \
+                  --data-urlencode \
+                  "text=⚠️ *Disk Space Kritis!*
+
+          💾 Terpakai: ${USAGE}%
+          💽 Sisa: ${AVAIL}
+
+          📱 TWRP vince masih compiling."
+
+              fi
+
+              sleep 120
+
+            done
+
+          ) &
+
+          echo "DISK_MONITOR_PID=$!" >> "$GITHUB_ENV"
+
+      # ============================================================
+      # BUILD
+      # ============================================================
+
+      - name: Start Build
+        working-directory: twrp
+        env:
+          KBUILD_BUILD_USER: "RahmatSobrian"
+          KBUILD_BUILD_HOST: "YoruProject"
+        run: |
+          set -e
+
+          mkdir -p logs
+
+          export ALLOW_MISSING_DEPENDENCIES=true
+          export LC_ALL=C
+
+          . build/envsetup.sh
+
+          if ! type lunch >/dev/null 2>&1; then
+
+            echo "❌ lunch not found" \
+              | tee -a /tmp/full_build.log
+
+            exit 1
+
+          fi
+
+          echo "===== LUNCH ====="
+
+          lunch twrp_vince-eng \
+            2>&1 | tee -a /tmp/full_build.log
+
+          echo "TARGET_PRODUCT=$TARGET_PRODUCT" \
+            | tee -a /tmp/full_build.log
+
+          echo "TARGET_DEVICE=$TARGET_DEVICE" \
+            | tee -a /tmp/full_build.log
+
+          if [ "$TARGET_PRODUCT" != "twrp_vince" ]; then
+
+            echo "❌ TARGET_PRODUCT salah: $TARGET_PRODUCT" \
+              | tee -a /tmp/full_build.log
+
+            exit 1
+
+          fi
+
+          echo "===== BUILD RECOVERY ====="
+
+          set +e
+
+          mka -j"$(nproc --all)" recoveryimage \
+            2>&1 \
+            | tee logs/build.txt \
+            | tee -a /tmp/full_build.log
+
+          BUILD_RESULT=${PIPESTATUS[0]}
+
+          set -e
+
+          echo "Build exit code: $BUILD_RESULT" \
+            | tee -a /tmp/full_build.log
+
+          exit "$BUILD_RESULT"
+
+      # ============================================================
+      # STOP DISK MONITOR
+      # ============================================================
+
+      - name: Stop Disk Monitor & Save Log
+        if: always()
+        run: |
+          kill "${DISK_MONITOR_PID:-}" 2>/dev/null || true
+
+          echo "=== FINAL $(date +%H:%M:%S) ===" \
+            >> /tmp/disk_monitor.log
+
+          df -h \
+            >> /tmp/disk_monitor.log
+
+          mkdir -p twrp/debug-info
+
+          cp \
+            /tmp/disk_monitor.log \
+            twrp/debug-info/disk_monitor.log \
+            2>/dev/null || true
+
+      # ============================================================
+      # POST BUILD DISK
+      # ============================================================
+
+      - name: Check Disk Space After Compile
+        if: always()
+        run: |
+          df -h
+
+      # ============================================================
+      # COLLECT FINAL BUILD FILES
+      # ============================================================
+
+      - name: Collect Debug Info
+        if: always()
+        working-directory: twrp
+        run: |
+          set +e
+
+          mkdir -p debug-info
+
+          OUT="out/target/product/vince/recovery/root/system/etc"
+
+          echo "===== BUILD OUTPUT =====" \
+            > debug-info/build-meta.txt
+
+          echo "Build finished at $(date)" \
+            >> debug-info/build-meta.txt
+
+          echo "TARGET_PRODUCT=twrp_vince" \
+            >> debug-info/build-meta.txt
+
+          echo "" \
+            >> debug-info/build-meta.txt
+
+          echo "===== FINAL FILES =====" \
+            >> debug-info/build-meta.txt
+
+          find out/target/product/vince/recovery/root \
+            -type f \
+            2>/dev/null \
+            | grep -E \
+              'twrp\.fstab|recovery\.fstab|merge-fstab|twrp\.flags' \
+            >> debug-info/build-meta.txt
+
+          # --------------------------------------------------------
+          # Final TWRP FSTAB
+          # --------------------------------------------------------
+
+          if [ -f "$OUT/twrp.fstab" ]; then
+
+            cp -v \
+              "$OUT/twrp.fstab" \
+              debug-info/twrp.fstab.final
+
+          else
+
+            echo "twrp.fstab.final tidak ditemukan" \
+              > debug-info/twrp.fstab.final
+
+          fi
+
+          # --------------------------------------------------------
+          # Final recovery.fstab
+          # --------------------------------------------------------
+
+          if [ -f "$OUT/recovery.fstab" ]; then
+
+            cp -v \
+              "$OUT/recovery.fstab" \
+              debug-info/recovery.fstab.final
+
+          else
+
+            echo "recovery.fstab.final tidak ditemukan" \
+              > debug-info/recovery.fstab.final
+
+          fi
+
+          # --------------------------------------------------------
+          # Final BoardConfig
+          # --------------------------------------------------------
+
+          cp -v \
+            device/xiaomi/vince/BoardConfig.mk \
+            debug-info/BoardConfig.mk.used \
+            2>/dev/null || true
+
+          # --------------------------------------------------------
+          # Device tree files
+          # --------------------------------------------------------
+
+          cp -v \
+            device/xiaomi/vince/recovery/root/system/bin/merge-fstab.sh \
+            debug-info/merge-fstab.sh \
+            2>/dev/null || true
+
+          cp -v \
+            device/xiaomi/vince/recovery/root/system/etc/twrp.flags.dynpart \
+            debug-info/twrp.flags.dynpart \
+            2>/dev/null || true
+
+          cp -v \
+            device/xiaomi/vince/recovery/root/system/etc/twrp.flags.nondynpart \
+            debug-info/twrp.flags.nondynpart \
+            2>/dev/null || true
+
+          # --------------------------------------------------------
+          # Search dynamic configuration
+          # --------------------------------------------------------
+
+          echo "" \
+            >> debug-info/build-meta.txt
+
+          echo "===== DYNAMIC CONFIG =====" \
+            >> debug-info/build-meta.txt
+
+          grep -nE \
+            'SUPER_PARTITION|DYNPART|TW_INCLUDE_LOGICAL|TARGET_COPY_OUT' \
+            device/xiaomi/vince/BoardConfig.mk \
+            >> debug-info/build-meta.txt \
+            2>/dev/null || true
+
+      # ============================================================
+      # UPLOAD BUILD LOG
+      # ============================================================
+
+      - name: Upload Build Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: twrp/logs/build.txt
+          if-no-files-found: warn
+
+      # ============================================================
+      # UPLOAD DEBUG
+      # ============================================================
+
+      - name: Upload Debug Info
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-vince-dynamic-debug-info
+          path: twrp/debug-info
+          if-no-files-found: warn
+        continue-on-error: true
+
+      # ============================================================
+      # UPLOAD RECOVERY
+      # ============================================================
+
+      - name: Upload recovery.img
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-vince-dynamic-recovery
+          path: twrp/out/target/product/vince/recovery.img
+          if-no-files-found: error
+
+      # ============================================================
+      # UPLOAD ZIP
+      # ============================================================
+
+      - name: Upload TWRP zip
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-vince-dynamic-zip
+          path: twrp/out/target/product/vince/twrp*.zip
+          if-no-files-found: warn
+        continue-on-error: true
+
+      # ============================================================
+      # TELEGRAM SUCCESS
+      # ============================================================
+
+      - name: Notify Telegram - Build Success
+        if: success()
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          BUILD_DATE=$(date +"%Y-%m-%d %H:%M:%S UTC")
+
+          IMG_SIZE=$(
+            du -sh \
+              twrp/out/target/product/vince/recovery.img \
+              2>/dev/null \
+              | cut -f1
+          )
+
+          [ -n "$IMG_SIZE" ] || IMG_SIZE="N/A"
+
+          DISK_FINAL=$(
+            df -h / \
+              | tail -1 \
+              | awk '{print "Terpakai "$5" (sisa "$4")"}'
+          )
+
+          curl -s -X POST \
+            "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            -d parse_mode="Markdown" \
+            --data-urlencode \
+            "text=✅ *TWRP Build Sukses!*
+
+          📱 *Device:* Xiaomi Redmi 5 Plus (vince)
+          🧩 *Platform:* mi8953 / MSM8953
+          🌿 *Branch:* twrp-12.1
+          💾 *Mode:* Retrofit Dynamic Partition
+          📦 *Recovery:* ${IMG_SIZE}
+          💽 *Disk:* ${DISK_FINAL}
+          🕒 *Selesai:* ${BUILD_DATE}
+
+          📥 Artifacts:
+          • recovery.img
+          • twrp-*.zip
+          • build.txt
+          • debug-info
+
+          🔗 [Download / Lihat Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+
+      # ============================================================
+      # TELEGRAM FAILURE - DISK
+      # ============================================================
+
+      - name: Send Disk Monitor Log on Failure
+        if: failure()
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          if [ -f /tmp/disk_monitor.log ]; then
+
+            curl -s -X POST \
+              "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
+              -F chat_id="${TG_CHAT_ID}" \
+              -F document=@/tmp/disk_monitor.log \
+              -F caption="💾 Disk monitor - TWRP vince dynamic - FAILED"
+
+          fi
+
+      # ============================================================
+      # TELEGRAM FAILURE - FULL LOG
+      # ============================================================
+
+      - name: Upload Full Log to Telegram on Failure
+        if: failure()
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          mkdir -p twrp/logs
+
+          cat /tmp/full_build.log \
+            >> twrp/logs/build.txt \
+            2>/dev/null || true
+
+          LOG_FILE="twrp/logs/build.txt"
+
+          if [ ! -f "$LOG_FILE" ]; then
+            LOG_FILE="/tmp/full_build.log"
+          fi
+
+          if [ -f "$LOG_FILE" ]; then
+
+            FILE_SIZE=$(du -m "$LOG_FILE" | cut -f1)
+
+            if [ "$FILE_SIZE" -gt 45 ]; then
+
+              gzip -c "$LOG_FILE" \
+                > "${LOG_FILE}.gz"
+
+              curl -s -X POST \
+                "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
+                -F chat_id="${TG_CHAT_ID}" \
+                -F document=@"${LOG_FILE}.gz" \
+                -F caption="📄 Full build log compressed - TWRP vince dynamic - FAILED"
+
+            else
+
+              curl -s -X POST \
+                "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
+                -F chat_id="${TG_CHAT_ID}" \
+                -F document=@"${LOG_FILE}" \
+                -F caption="📄 Full build log - TWRP vince dynamic - FAILED"
+
+            fi
+
+          fi
+
+      # ============================================================
+      # TELEGRAM FAILURE
+      # ============================================================
+
+      - name: Notify Telegram - Build Failed
+        if: failure()
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          BUILD_DATE=$(date +"%Y-%m-%d %H:%M:%S UTC")
+
+          DISK_FINAL=$(
+            df -h / \
+              | tail -1 \
+              | awk '{print "Terpakai "$5" (sisa "$4")"}'
+          )
+
+          curl -s -X POST \
+            "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            -d parse_mode="Markdown" \
+            --data-urlencode \
+            "text=❌ *TWRP Build GAGAL!*
+
+          📱 *Device:* Xiaomi Redmi 5 Plus (vince)
+          🧩 *Platform:* mi8953 / MSM8953
+          🌿 *Branch:* twrp-12.1
+          💾 *Mode:* Retrofit Dynamic Partition
+          💽 *Disk:* ${DISK_FINAL}
+          🕒 *Waktu:* ${BUILD_DATE}
+
+          📄 Build log + debug-info sudah tersedia di Artifacts.
+
+          🔗 [Lihat Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"

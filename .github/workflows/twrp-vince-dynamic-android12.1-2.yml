@@ -345,8 +345,37 @@ jobs:
               # Dynamic partition terdeteksi
               cat /system/etc/twrp.flags.dynpart >> /system/etc/twrp.flags
               echo >> /system/etc/recovery.fstab
+              # =================================================================
+              # FIX: partisi "system" HARUS dikasih mount point /system_root,
+              # BUKAN /system.
+              #
+              # ROOT CAUSE (dikonfirmasi dari source TWRP, partitionmanager.cpp
+              # Find_Partition_By_Path):
+              #     if (Local_Path == "/system")
+              #         Local_Path = Get_Android_Root_Path();
+              #   Build TWRP 12.1 ini system-as-root, jadi Get_Android_Root_Path()
+              #   balikin "/system_root". Setiap pencarian partisi "/system" di
+              #   internal TWRP (termasuk OS-detection "No OS Installed") selalu
+              #   di-redirect ke path itu. Kalau partisi system logical
+              #   didaftarin dengan mount point "/system" (bukan "/system_root"),
+              #   TWRP gak pernah nemu match saat scan -> "Unable to find
+              #   partition for path '/system_root'" -> "No OS Installed", padahal
+              #   partisi logicalnya sendiri sukses ke-mount (makanya boot ke
+              #   system tetap normal - masalahnya cuma di lookup path TWRP, bukan
+              #   di mounting-nya).
+              #
+              #   Kolom pertama TETAP "system" (nama partisi buat resolve
+              #   logical/super lewat fs_mgr) - yang diganti cuma kolom mount
+              #   point-nya, biar konsisten sama cabang nondynpart di bawah yang
+              #   sudah benar pakai /system_root.
+              # =================================================================
               for p in system system_ext product vendor odm; do
-                  echo "${p} /${p} ext4 rw,barrier=1,discard wait,logical" >> /system/etc/recovery.fstab
+                  if [ "$p" = "system" ]; then
+                      mnt="/system_root"
+                  else
+                      mnt="/${p}"
+                  fi
+                  echo "${p} ${mnt} ext4 rw,barrier=1,discard wait,logical" >> /system/etc/recovery.fstab
               done
               echo >> /system/etc/twrp.flags
               for p in cust; do

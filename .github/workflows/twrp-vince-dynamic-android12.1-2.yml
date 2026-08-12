@@ -421,7 +421,13 @@ jobs:
                       mnt="/${p}"
                   fi
                   if [ "$p" = "vendor" ] || [ "$p" = "odm" ]; then
-                      echo "${mnt} ext4 /dev/block/mapper/${p} flags=display=\"${p}\";backup=1;wipeingui;readonly" >> /system/etc/twrp.flags
+                      # FIX: TWRP tidak punya flag boolean "readonly"/"ro" (dicek dari
+                      # tabel tw_flags[] di partition.cpp - hasilnya "unhandled flag").
+                      # Cara yang benar & memang dikenali parser: fsflags="ro", yang
+                      # diproses lewat Process_FS_Flags() -> match ke mount_flags[]
+                      # bawaan TWRP -> set Mount_Read_Only = true -> di-OR-kan ke
+                      # flags MS_RDONLY saat TWPartition::Mount() beneran manggil mount().
+                      echo "${mnt} ext4 /dev/block/mapper/${p} flags=display=\"${p}\";backup=1;wipeingui;fsflags=\"ro\"" >> /system/etc/twrp.flags
                   else
                       echo "${mnt} ext4 /dev/block/mapper/${p} flags=display=\"${p}\";backup=1;wipeingui" >> /system/etc/twrp.flags
                   fi

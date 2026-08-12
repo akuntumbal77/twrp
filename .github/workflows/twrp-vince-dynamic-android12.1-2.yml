@@ -230,6 +230,53 @@ jobs:
           # pernah unmount /system - checkbox jadi efektif nonaktif permanen.
           # =====================================================================
           TW_NEVER_UNMOUNT_SYSTEM := true
+
+          # =====================================================================
+          # FIX: error "Unable to override 'external_storage.casefold.enabled'/
+          # 'external_storage.sdcardfs.enabled' due to missing libresetprop"
+          #
+          # ROOT CAUSE: ini bug dikenal luas di TWRP upstream untuk Android 12+
+          # (dialami banyak device lain - Fairphone 5, Realme C35, dll, bukan
+          # spesifik dari patch fstab kita). TWRP mencoba override 2 system
+          # property terkait fitur storage runtime Android pakai resetprop,
+          # tapi library libresetprop TIDAK disertakan di build minimal
+          # default. Errornya kosmetik (tidak berdampak fungsional), tapi flag
+          # resmi TW_INCLUDE_RESETPROP menyertakan library itu ke build supaya
+          # errornya benar-benar hilang, bukan cuma disembunyikan.
+          # =====================================================================
+          TW_INCLUDE_RESETPROP := true
+
+          # =====================================================================
+          # FIX: tidak ada indikator/persentase baterai di UI TWRP
+          #
+          # ROOT CAUSE: TWRP butuh tahu PERSIS path sysfs mana yang menyimpan
+          # data baterai device ini. Tanpa TW_CUSTOM_BATTERY_PATH di-set, TWRP
+          # fallback ke default generic path yang mungkin tidak match struktur
+          # /sys/class/power_supply/ milik vince/mi8953 - hasilnya baterai
+          # sysfs entries tidak pernah ke-load, jadi UI battery indicator
+          # kosong total. Path di bawah adalah path umum Qualcomm Battery Fuel
+          # Gauge (qpnp/bms) yang dipakai di keluarga MSM8937/MSM8953 - kalau
+          # device kamu beda, cek `cat /sys/class/power_supply/*/capacity` di
+          # ADB shell saat sedang boot ke ROM/system (bukan recovery) untuk
+          # temukan power_supply node yang benar-benar melaporkan angka
+          # capacity valid, lalu sesuaikan path di bawah.
+          # =====================================================================
+          TW_CUSTOM_BATTERY_PATH := /sys/class/power_supply/battery/capacity
+
+          # =====================================================================
+          # FIX: lag/patah-patah saat swipe, scroll, klik, dan animasi loading
+          # border tidak mulus
+          #
+          # ROOT CAUSE: TWRP default framerate GUI adalah 30fps, yang di
+          # beberapa device/kernel combo terasa patah-patah terutama untuk
+          # animasi swipe & border loading yang butuh interpolasi halus.
+          # Menaikkan TW_FRAMERATE ke 60fps membuat render loop GUI TWRP
+          # (gui/*.cpp, refresh page) jalan 2x lebih sering, sehingga animasi
+          # terasa jauh lebih mulus. Trade-off: sedikit lebih banyak CPU usage
+          # saat idle di recovery, yang di device modern seperti ini tidak
+          # signifikan.
+          # =====================================================================
+          TW_FRAMERATE := 60
           EOF
 
           # ===================================================================

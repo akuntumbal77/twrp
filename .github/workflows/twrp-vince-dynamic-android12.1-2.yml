@@ -377,6 +377,43 @@ jobs:
                   fi
                   echo "${p} ${mnt} ext4 rw,barrier=1,discard wait,logical" >> /system/etc/recovery.fstab
               done
+
+              # =================================================================
+              # FIX #2 (root cause sebenarnya, terkonfirmasi dari logcat+recovery.log):
+              # daftarkan juga system/system_ext/product/vendor/odm di
+              # /etc/twrp.flags (format NATIVE TWRP), bukan cuma di recovery.fstab.
+              #
+              # ROOT CAUSE: recovery.log menunjukkan TWRP PartitionManager
+              # ("Processing /etc/twrp.fstab" / "Reading /etc/twrp.flags")
+              # MEMBANGUN partition list-nya (GUI, OS-detection, backup) MURNI
+              # dari /etc/twrp.fstab + /etc/twrp.flags - TIDAK PERNAH dari
+              # /etc/recovery.fstab. File recovery.fstab (format AOSP,
+              # wait,logical) yang kita tulis di atas CUMA dipakai oleh binary
+              # `recovery` sendiri buat aktivasi awal device-mapper (dan itu
+              # sudah terbukti sukses dari logcat: "[libfs_mgr]Created logical
+              # partition system on device /dev/block/dm-0" dst, terjadi
+              # bahkan SEBELUM baris "Processing /etc/twrp.fstab" muncul).
+              #
+              # Karena system/system_ext/product/vendor/odm tidak pernah
+              # terdaftar di twrp.fstab/twrp.flags, TWRP tidak pernah tahu ada
+              # partisi bernama /system_root -> "Unable to find partition for
+              # path '/system_root'" -> "No OS Installed" terus, walau
+              # device-mapper-nya sendiri sudah aktif dan valid.
+              #
+              # Device /dev/block/mapper/<nama> aman dipakai di sini karena
+              # sudah dibuat otomatis oleh recovery binary itu sendiri (lewat
+              # ueventd, dari uevent DM_NAME) sebelum baris ini sempat jalan.
+              # =================================================================
+              echo >> /system/etc/twrp.flags
+              for p in system system_ext product vendor odm; do
+                  if [ "$p" = "system" ]; then
+                      mnt="/system_root"
+                  else
+                      mnt="/${p}"
+                  fi
+                  echo "${mnt} ext4 /dev/block/mapper/${p} flags=display=\"${p}\";backup=1;wipeingui" >> /system/etc/twrp.flags
+              done
+
               echo >> /system/etc/twrp.flags
               for p in cust; do
                   echo "/super_${p} emmc /dev/block/by-name/${p} flags=display=\"Super_${p}\";backup=1" >> /system/etc/twrp.flags

@@ -24,7 +24,7 @@ jobs:
           docker-images: true
           
       - name: Free Disk Space
-        uses: endersonmenezes/free-disk-space@v3
+        uses: endersonmenezes/free-disk-space@v3  # Use @main for latest, @v3 for stable
         with:
           remove_android: true
           remove_dotnet: true
@@ -34,8 +34,8 @@ jobs:
           remove_packages: "azure-cli google-cloud-cli microsoft-edge-stable google-chrome-stable firefox postgresql* temurin-* *llvm* mysql* dotnet-sdk-*"
           remove_packages_one_command: true
           remove_folders: "/usr/share/swift /usr/share/miniconda /usr/share/az* /usr/local/lib/node_modules /usr/local/share/chromium /usr/local/share/powershell /usr/local/julia /usr/local/aws-cli /usr/local/aws-sam-cli /usr/share/gradle"
-          rm_cmd: "rm"
-          rmz_version: "3.1.1"
+          rm_cmd: "rm"  # Use 'rmz' for faster deletion (default: 'rm')
+          rmz_version: "3.1.1"  # Required when rm_cmd is 'rmz'
           testing: false
 
       - name: Check Disk Space (after reclaim)
@@ -60,7 +60,7 @@ jobs:
             -d parse_mode="Markdown" \
             -d text="🔨 *TWRP Build Started (Dynamic Partition)*
             📱 *Device:* Xiaomi Redmi 5 Plus (vince) - mi8953
-            🌿 *Branch:* android-12.1 (patched: super/dynamic)
+            🌿 *Branch:* android-12.1 (patched: RDP fstab arch v2)
             🕒 *Time:* ${BUILD_DATE}
             🔗 [GitHub Actions](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
 
@@ -131,6 +131,13 @@ jobs:
             device/xiaomi/vince \
             2>&1 | tee -a /tmp/full_build.log
 
+      # =====================================================================
+      # GANTI KERNEL PREBUILT: kernel bawaan device tree vince (4.9.291)
+      # TERBUKTI tidak support MADV_WIPEONFORK, menyebabkan updater ROM
+      # crash SIGABRT saat inisialisasi arc4random. Diganti kernel 4.19
+      # khusus vince/mi8953/msm8953 yang sudah support ROM retrofit
+      # dynamic partition (RDP).
+      # =====================================================================
       - name: Replace Prebuilt Kernel (4.19, fix MADV_WIPEONFORK / dynamic partition support)
         run: |
           cd twrp/device/xiaomi/vince
@@ -138,18 +145,36 @@ jobs:
           echo "== Download kernel custom 4.19 =="
           curl -L -o prebuilt/Image.gz-dtb \
             "https://github.com/rahmatsobrian/dummy/raw/refs/heads/main/Image.gz-dtb"
-          echo "== Info file kernel =="
           ls -la prebuilt/Image.gz-dtb
           file prebuilt/Image.gz-dtb || true
 
           echo "== Sesuaikan TARGET_KERNEL_VERSION di BoardConfig.mk (4.9 -> 4.19) =="
-          grep -n "^TARGET_KERNEL_VERSION" BoardConfig.mk
           sed -i 's/^TARGET_KERNEL_VERSION := .*/TARGET_KERNEL_VERSION := 4.19/' BoardConfig.mk
           grep -n "^TARGET_KERNEL_VERSION" BoardConfig.mk
 
-          echo "== BOARD_KERNEL_* saat ini (untuk referensi debug kalau boot gagal) =="
-          grep "^BOARD_KERNEL_" BoardConfig.mk
-
+      # =====================================================================
+      # ARSITEKTUR FSTAB FINAL - disalin 1:1 dari source asli device tree
+      # mi8937/msm8937 (diverifikasi langsung dari file .zip aslinya, bukan
+      # rekonstruksi/asumsi).
+      #
+      # TEMUAN KUNCI: device tree mi8937 TIDAK PUNYA file `recovery.fstab`
+      # maupun `twrp.fstab` biasa di source SAMA SEKALI. Yang ada cuma
+      # varian: recovery.fstab.fde / recovery.fstab.fbev2, dan
+      # twrp.flags.fde / twrp.flags.fbev2 / twrp.flags.nondynpart.
+      #
+      # File recovery.fstab & twrp.flags yang SEBENARNYA dipakai TWRP itu
+      # 100% DIBUAT DARI NOL setiap kali recovery boot oleh merge-fstab.sh
+      # (lewat `echo >> file_belum_ada` yang otomatis create file baru).
+      # TIDAK PERNAH ada base file yang dimodifikasi atau perlu di-restore -
+      # selalu fresh generate setiap boot. Ini sekaligus membuatnya idempotent
+      # secara alami (tidak butuh mekanisme .orig/restore terpisah).
+      #
+      # ROOT CAUSE error "Unable to find partition for path '/system_root'"
+      # yang muncul di percobaan sebelumnya: kita masih menyisakan base file
+      # recovery.fstab/twrp.fstab hasil modifikasi (sed) dari file asli
+      # vince, alih-alih menghapusnya total dan generate murni dari nol
+      # seperti device tree referensi.
+      # =====================================================================
       - name: Patch Device Tree for Dynamic Partition (Super) Support
         run: |
           cd twrp/device/xiaomi/vince
@@ -181,113 +206,118 @@ jobs:
           BOARD_SYSTEM_EXTIMAGE_FILE_SYSTEM_TYPE := ext4
           BOARD_ODMIMAGE_FILE_SYSTEM_TYPE := ext4
 
-          # TWRP: aktifkan dukungan mount partisi logical
           TW_INCLUDE_LOGICAL := true
           EOF
 
-          echo "== [FIX UTAMA] Hapus entry /system & /system_image & /vendor statis dari twrp.fstab =="
-          FSTAB=recovery/root/system/etc/twrp.fstab
-          sed -i '/^\/system /d;/^\/system_image /d;/^\/vendor /d;/^\/vendor_image /d' "$FSTAB"
-          echo "== Hasil twrp.fstab (base, tanpa system/vendor statis) =="
-          cat "$FSTAB"
+          echo "== [FIX UTAMA] Hapus TOTAL recovery.fstab & twrp.fstab bawaan (akan digenerate runtime dari nol) =="
+          rm -f recovery/root/system/etc/recovery.fstab
+          rm -f recovery/root/system/etc/twrp.fstab
 
-          echo "== Buat recovery.fstab base (tanpa entry system/vendor statis) =="
-          RFSTAB=recovery/root/system/etc/recovery.fstab
-          sed -i '/\/by-name\/system\s\+\/system/d;/\/by-name\/cust\s\+\/vendor/d' "$RFSTAB"
-          echo "== Hasil recovery.fstab base =="
-          cat "$RFSTAB"
+          echo "== Buat recovery.fstab.fbev2 (base untuk kernel 4.19 kita) =="
+          cat > recovery/root/system/etc/recovery.fstab.fbev2 << 'EOF'
+          # Android fstab file.
+          #<src>                                      <mnt_point>     <type>      <mnt_flags and options>                             <fs_mgr_flags>
+          /dev/block/bootdevice/by-name/logdump       /metadata       ext4        nosuid,nodev,noatime,discard                        wait,check,formattable
+          /dev/block/bootdevice/by-name/userdata      /data           ext4        nosuid,nodev,noatime,discard                        wait,check,quota,formattable,encryptable=footer
+          EOF
 
-          # =====================================================================
-          # SIMPLIFIKASI: device tree ini dibuild KHUSUS untuk 1 ROM dynamic
-          # partition (bukan dual-purpose lama/baru seperti device tree
-          # referensi mi8937/msm8937). Deteksi runtime (dd|strings|grep nama
-          # grup) sebelumnya TERBUKTI TIDAK RELIABLE - dari recovery.log &
-          # dmesg, script itu SELALU jatuh ke branch "nondynpart" (fallback
-          # statis) meskipun ROM-nya jelas dynamic partition, kemungkinan
-          # karena nama grup metadata asli ROM beda dari tebakan
-          # "mi8953_dynpart" yang kita salin dari device lain. Makanya
-          # /system_root kadang ketemu (busy) kadang tidak ketemu sama sekali
-          # tergantung kondisi partisi saat itu - tidak konsisten & rawan.
-          #
-          # FIX: hapus total mekanisme deteksi & branching. LANGSUNG pakai
-          # skema dynamic partition tanpa syarat apapun.
-          # =====================================================================
-          echo "== Buat twrp.flags.dynpart (SELALU dipakai, tanpa deteksi runtime) =="
-          cat > recovery/root/system/etc/twrp.flags.dynpart << 'EOF'
+          echo "== Buat twrp.flags.fbev2 (base twrp.flags untuk kernel 4.19 kita) =="
+          cat > recovery/root/system/etc/twrp.flags.fbev2 << 'EOF'
           # mount point   fstype  device                      device2                     flags
 
-          # Data & Metadata (tidak masuk super, tetap statis)
+          # Data & Metadata
           /data           ext4    /dev/block/bootdevice/by-name/userdata                  flags=encryptable=footer;fsflags="discard"
           /metadata       ext4    /dev/block/bootdevice/by-name/logdump                   flags=display="Metadata";fsflags="discard"
           EOF
 
-          echo "== Buat merge-fstab.sh (SELALU pakai skema dynamic partition, tanpa deteksi) =="
+          echo "== Buat twrp.flags.nondynpart (fallback kalau device MASIH statis) =="
+          cat > recovery/root/system/etc/twrp.flags.nondynpart << 'EOF'
+          # mount point   fstype  device                      device2                     flags
+
+          # System
+          /system_root    ext4    /dev/block/bootdevice/by-name/system                    flags=display="System";fsflags="discard";wipeingui
+          /system_image   emmc    /dev/block/bootdevice/by-name/system                    flags=display="System";backup=1;flashimg=1
+          /vendor         ext4    /dev/block/bootdevice/by-name/cust                      flags=display="Vendor";fsflags="discard";wipeingui
+          /vendor_image   emmc    /dev/block/bootdevice/by-name/cust                      flags=display="Vendor";backup=1;flashimg=1
+          EOF
+
+          echo "== Buat merge-fstab.sh (disalin 1:1 dari struktur mi8937 asli, marker diganti mi8953_dynpart) =="
           mkdir -p recovery/root/system/bin
           cat > recovery/root/system/bin/merge-fstab.sh << 'EOF'
           #!/system/bin/sh
           echo >> /system/etc/recovery.fstab
           echo >> /system/etc/twrp.flags
 
-          # =====================================================================
-          # PERCOBAAN: symlink /dev/block/by-name/super DIHAPUS.
-          #
-          # Sebelumnya kita buat symlink manual /dev/block/by-name/super ->
-          # by-name/system, dengan asumsi updater-binary hardcode nyari nama
-          # "super". Tapi dari logcat terbaru, liblp gagal baca metadata saat
-          # boot KEDUA (setelah ROM dipakai sekali):
-          #   "[liblp]Logical partition metadata has invalid geometry magic
-          #    signature." / "Could not read partition table."
-          #
-          # BOARD_SUPER_PARTITION_METADATA_DEVICE := system SUDAH benar di
-          # BoardConfig.mk (dicek ulang, 100% sama dgn BoardConfig.mk ROM
-          # asli) - TWRP seharusnya otomatis tahu baca metadata dari "system"
-          # tanpa perlu symlink apapun. Dugaan sekarang: symlink "super" ini
-          # yang membuat sebagian komponen (liblp/update_engine) baca metadata
-          # HANYA dari partition "system" sendirian, padahal layoutnya
-          # retrofit gabungan cust+system - hasilnya metadata kebaca
-          # tidak lengkap/rusak. Dihapus dulu sebagai percobaan.
-          # =====================================================================
+          cat /system/etc/recovery.fstab.fbev2 >> /system/etc/recovery.fstab
+          cat /system/etc/twrp.flags.fbev2 >> /system/etc/twrp.flags
 
-          # LANGSUNG pakai skema dynamic partition - TANPA deteksi runtime
-          # (deteksi sebelumnya terbukti tidak reliable, lihat catatan di
-          # workflow yml).
-          cat /system/etc/twrp.flags.dynpart >> /system/etc/twrp.flags
-          echo >> /system/etc/recovery.fstab
-          for p in system system_ext product vendor odm; do
-              echo "${p} /${p} ext4 rw,barrier=1,discard wait,logical" >> /system/etc/recovery.fstab
+          # Dynamic Partitions (retrofit)
+          if dd if=/dev/block/by-name/system bs=256k count=1 2>/dev/null | strings | grep mi8953_dynpart > /dev/null; then
+              echo >> /system/etc/recovery.fstab
+              for p in system system_ext product vendor odm; do
+                  echo "${p} /${p} ext4 rw,barrier=1,discard wait,logical" >> /system/etc/recovery.fstab
+              done
+              echo >> /system/etc/twrp.flags
+              for p in cust; do
+                  echo "/super_${p} emmc /dev/block/by-name/${p} flags=display=\"Super_${p}\";backup=1" >> /system/etc/twrp.flags
+              done
+          else
+              echo >> /system/etc/twrp.flags
+              cat /system/etc/twrp.flags.nondynpart >> /system/etc/twrp.flags
+              echo "/super emmc /dev/block/by-name/system flags=display=\"Super\";backup=1" >> /system/etc/twrp.flags
+              for p in cust; do
+                  echo "/super_${p} emmc /dev/block/by-name/${p} flags=display=\"Super_${p}\";backup=1" >> /system/etc/twrp.flags
+              done
+          fi
+
+          # Symlink kompatibilitas /dev/block/by-name/super untuk updater ROM
+          # yang hardcode cari nama partition fisik "super" (liblp). Device
+          # ini tidak punya partisi fisik bernama "super" - metadata dynamic
+          # partition menumpang di partisi fisik "system".
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+              [ -e /dev/block/by-name/system ] && break
+              sleep 0.5
           done
-          echo >> /system/etc/twrp.flags
-          echo "/super emmc /dev/block/by-name/system flags=display=\"Super\";backup=1" >> /system/etc/twrp.flags
-          for p in cust; do
-              echo "/super_${p} emmc /dev/block/by-name/${p} flags=display=\"Super_${p}\";backup=1" >> /system/etc/twrp.flags
-          done
+          if [ -e /dev/block/by-name/system ]; then
+              ln -sf /dev/block/by-name/system /dev/block/by-name/super
+          fi
           EOF
           chmod 755 recovery/root/system/bin/merge-fstab.sh
 
-          echo "== Daftarkan merge-fstab.sh supaya jalan saat 'on init' recovery =="
-          INIT_RC=$(find recovery/root -maxdepth 1 -iname "init.recovery.*.rc" | head -1)
-          if [ -z "$INIT_RC" ]; then
-            INIT_RC="recovery/root/init.recovery.msm8953.rc"
-            touch "$INIT_RC"
+          echo "== Daftarkan merge-fstab.sh persis format asli mi8937 (on init, syntax exec tanpa argumen root root) =="
+          INIT_RC="recovery/root/init.recovery.msm8953.rc"
+          if [ ! -f "$INIT_RC" ]; then
+            EXISTING_RC=$(find recovery/root -maxdepth 1 -iname "init.recovery.*.rc" | head -1)
+            if [ -n "$EXISTING_RC" ]; then
+              INIT_RC="$EXISTING_RC"
+            else
+              touch "$INIT_RC"
+            fi
           fi
-          sed -i '/^on early-init$/,/merge-fstab\.sh/d' "$INIT_RC" 2>/dev/null || true
+          sed -i '/^# Fstab$/,/merge-fstab\.sh$/d' "$INIT_RC" 2>/dev/null || true
+          sed -i '/^on early-init$/,/merge-fstab\.sh$/d' "$INIT_RC" 2>/dev/null || true
           if ! grep -q "merge-fstab.sh" "$INIT_RC"; then
             cat >> "$INIT_RC" << 'EOF'
 
+          # Fstab
           on init
-              exec u:r:recovery:s0 root root -- /system/bin/merge-fstab.sh
+              exec u:r:recovery:s0 -- /system/bin/merge-fstab.sh
           EOF
           fi
-          echo "== Isi $INIT_RC (bagian merge-fstab) =="
-          grep -B 1 -A 2 "merge-fstab" "$INIT_RC"
+          echo "== Isi $INIT_RC =="
+          cat "$INIT_RC"
 
           echo "== Ringkasan hasil akhir ==" 
           echo "-- BoardConfig.mk (bagian dynamic partition) --"
-          tail -n 25 BoardConfig.mk
-          echo "-- twrp.fstab (base, harus TANPA /system & /vendor) --"
-          cat "$FSTAB"
-          echo "-- File flags & merge script yang dibuat --"
-          ls -la recovery/root/system/etc/twrp.flags.* recovery/root/system/bin/merge-fstab.sh
+          tail -n 20 BoardConfig.mk
+          echo "-- File yang dibuat --"
+          ls -la recovery/root/system/etc/recovery.fstab.fbev2 \
+                 recovery/root/system/etc/twrp.flags.fbev2 \
+                 recovery/root/system/etc/twrp.flags.nondynpart \
+                 recovery/root/system/bin/merge-fstab.sh
+          echo "-- Konfirmasi TIDAK ADA base recovery.fstab/twrp.fstab lagi --"
+          ls recovery/root/system/etc/recovery.fstab 2>/dev/null && echo "MASIH ADA (SALAH!)" || echo "OK: sudah dihapus"
+          ls recovery/root/system/etc/twrp.fstab 2>/dev/null && echo "MASIH ADA (SALAH!)" || echo "OK: sudah dihapus"
 
       - name: Increase Kernel/Recovery Log Verbosity (for debugging)
         run: |
@@ -301,10 +331,7 @@ jobs:
         run: |
           cd twrp/device/xiaomi/vince
           set -e
-          echo "== Sebelum =="
-          grep -n "^TW_DEVICE_VERSION" BoardConfig.mk
           sed -i 's/^TW_DEVICE_VERSION := .*/TW_DEVICE_VERSION := Redmi 5 Plus | RahmatSobrian/' BoardConfig.mk
-          echo "== Sesudah =="
           grep -n "^TW_DEVICE_VERSION" BoardConfig.mk
 
       - name: Check Disk Space (before compile)
@@ -313,10 +340,7 @@ jobs:
       - name: Show Biggest Folders (debug)
         working-directory: twrp
         run: |
-          echo "== Top 15 folder terbesar di twrp/ =="
           du -h --max-depth=1 . 2>/dev/null | sort -rh | head -15
-          echo ""
-          echo "== Total ukuran twrp/ =="
           du -sh . 2>/dev/null
 
       - name: Notify Telegram - Compiling
@@ -343,10 +367,8 @@ jobs:
               echo "=== $(date +%H:%M:%S) ===" >> /tmp/disk_monitor.log
               df -h >> /tmp/disk_monitor.log
               echo "" >> /tmp/disk_monitor.log
-
               USAGE=$(df / | tail -1 | awk '{print $5}' | tr -d '%')
               AVAIL=$(df -h / | tail -1 | awk '{print $4}')
-
               if [ "$USAGE" -ge 85 ] && [ "$ALERTED" = false ]; then
                 ALERTED=true
                 curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
@@ -357,7 +379,6 @@ jobs:
               🕒 $(date +%H:%M:%S)
               📱 Build TWRP vince masih jalan, kemungkinan bakal gagal karena disk penuh."
               fi
-
               sleep 120
             done
           ) &
@@ -424,10 +445,11 @@ jobs:
         run: |
           mkdir -p debug-info
           OUT=out/target/product/vince/recovery/root/system/etc
-          cp -v "$OUT/twrp.fstab" debug-info/twrp.fstab.final 2>/dev/null || echo "twrp.fstab.final: tidak ditemukan" > debug-info/twrp.fstab.final
-          cp -v "$OUT/recovery.fstab" debug-info/recovery.fstab.final 2>/dev/null || echo "recovery.fstab.final: tidak ditemukan" > debug-info/recovery.fstab.final
-          cp -v "$OUT/twrp.flags.dynpart" debug-info/twrp.flags.dynpart.final 2>/dev/null || true
-          cp -v device/xiaomi/vince/recovery/root/system/bin/merge-fstab.sh debug-info/merge-fstab.sh.used 2>/dev/null || true
+          cp -v "$OUT/recovery.fstab.fbev2" debug-info/recovery.fstab.fbev2.final 2>/dev/null || true
+          cp -v "$OUT/twrp.flags.fbev2" debug-info/twrp.flags.fbev2.final 2>/dev/null || true
+          cp -v "$OUT/twrp.flags.nondynpart" debug-info/twrp.flags.nondynpart.final 2>/dev/null || true
+          cp -v out/target/product/vince/recovery/root/system/bin/merge-fstab.sh debug-info/merge-fstab.sh.final 2>/dev/null || true
+          cp -v out/target/product/vince/recovery/root/init.recovery.msm8953.rc debug-info/init.recovery.msm8953.rc.final 2>/dev/null || true
           cp -v device/xiaomi/vince/BoardConfig.mk debug-info/BoardConfig.mk.used 2>/dev/null || true
           echo "Build finished at $(date)" > debug-info/build-meta.txt
           echo "TARGET_PRODUCT=twrp_vince" >> debug-info/build-meta.txt
@@ -469,7 +491,7 @@ jobs:
             -d parse_mode="Markdown" \
             -d text="✅ *TWRP Build Sukses! (Dynamic Partition)*
             📱 *Device:* Xiaomi Redmi 5 Plus (vince) - mi8953
-            🌿 *Branch:* android-12.1 (patched)
+            🌿 *Branch:* android-12.1 (RDP fstab arch v2)
             📦 *Image Size:* ${IMG_SIZE}
             💾 *Disk saat selesai:* ${DISK_FINAL}
             🕒 *Selesai:* ${BUILD_DATE}
@@ -498,12 +520,10 @@ jobs:
         run: |
           mkdir -p twrp/logs
           cat /tmp/full_build.log >> twrp/logs/build.txt 2>/dev/null || true
-
           LOG_FILE="twrp/logs/build.txt"
           if [ ! -f "$LOG_FILE" ]; then
             LOG_FILE="/tmp/full_build.log"
           fi
-
           if [ -f "$LOG_FILE" ]; then
             FILE_SIZE=$(du -m "$LOG_FILE" | cut -f1)
             if [ "$FILE_SIZE" -gt 45 ]; then
@@ -533,7 +553,7 @@ jobs:
             -d parse_mode="Markdown" \
             -d text="❌ *TWRP Build GAGAL! (Dynamic Partition)*
             📱 *Device:* Xiaomi Redmi 5 Plus (vince) - mi8953
-            🌿 *Branch:* android-12.1 (patched)
+            🌿 *Branch:* android-12.1 (RDP fstab arch v2)
             💾 *Disk saat gagal:* ${DISK_FINAL}
             🕒 *Waktu:* ${BUILD_DATE}
             📄 Full log & disk_monitor.log sudah dikirim/tersedia di artifacts.

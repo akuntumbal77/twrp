@@ -277,6 +277,7 @@ jobs:
           # Tanpa kutip, hasil macro compile-nya berpotensi tidak valid sebagai
           # string literal C++. Ditambahkan tanda kutip supaya konsisten dan aman.
           # =====================================================================
+          TW_USE_LEGACY_BATTERY_SERVICES := true
           TW_CUSTOM_BATTERY_PATH := "/sys/class/power_supply/battery"
 
           # =====================================================================
@@ -293,6 +294,15 @@ jobs:
           # signifikan.
           # =====================================================================
           TW_FRAMERATE := 60
+
+          # =====================================================================
+          # Aktifkan tombol "Reboot to EDL" di menu Reboot TWRP.
+          # Device tree vince punya baris `TW_HAS_EDL_MODE := false` bawaan;
+          # assignment `:=` di Makefile itu sekuensial, jadi baris ini yang
+          # ditaruh belakangan (lewat heredoc append ke BoardConfig.mk) akan
+          # override nilai false tsb tanpa perlu sed cari-ganti terpisah.
+          # =====================================================================
+          TW_HAS_EDL_MODE := true
           EOF
 
           # ===================================================================

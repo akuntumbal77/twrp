@@ -235,16 +235,22 @@ jobs:
           # FIX: error "Unable to override 'external_storage.casefold.enabled'/
           # 'external_storage.sdcardfs.enabled' due to missing libresetprop"
           #
-          # ROOT CAUSE: ini bug dikenal luas di TWRP upstream untuk Android 12+
-          # (dialami banyak device lain - Fairphone 5, Realme C35, dll, bukan
-          # spesifik dari patch fstab kita). TWRP mencoba override 2 system
-          # property terkait fitur storage runtime Android pakai resetprop,
-          # tapi library libresetprop TIDAK disertakan di build minimal
-          # default. Errornya kosmetik (tidak berdampak fungsional), tapi flag
-          # resmi TW_INCLUDE_RESETPROP menyertakan library itu ke build supaya
-          # errornya benar-benar hilang, bukan cuma disembunyikan.
+          # KOREKSI (dari komunitas, kasus IDENTIK persis - error message sama
+          # persis termasuk nama property-nya - dikonfirmasi via wiki.uotan.cn):
+          # TW_INCLUDE_RESETPROP SENDIRIAN TIDAK CUKUP. Itu cuma bikin binary
+          # `resetprop` & `libresetprop.so` ke-compile sebagai ARTIFACT TERPISAH
+          # (terbukti dari build.txt - keduanya sukses dibuat), tapi TIDAK
+          # nge-link library itu KE DALAM binary `recovery` utama. Fungsi
+          # internal TWRP yang manggil override property (legacy_property_service)
+          # tetap gagal karena symbol resetprop tidak ada di binary recovery-nya
+          # sendiri, walau resetprop CLI-nya sendiri ada di /system/bin.
+          #
+          # Flag KEDUA yang dibutuhkan: TW_INCLUDE_LIBRESETPROP := true - ini
+          # yang benar-benar nge-link libresetprop ke binary recovery utama,
+          # bukan cuma nyediain resetprop sebagai tool CLI terpisah.
           # =====================================================================
           TW_INCLUDE_RESETPROP := true
+          TW_INCLUDE_LIBRESETPROP := true
 
           # =====================================================================
           # FIX: tidak ada indikator/persentase baterai di UI TWRP
@@ -260,8 +266,18 @@ jobs:
           # ADB shell saat sedang boot ke ROM/system (bukan recovery) untuk
           # temukan power_supply node yang benar-benar melaporkan angka
           # capacity valid, lalu sesuaikan path di bawah.
+          #
+          # KOREKSI QUOTING: value sebelumnya TANPA tanda kutip. Android.mk
+          # TWRP (bootable/recovery) forward flag ini APA ADANYA ke compiler:
+          #   LOCAL_CFLAGS += -DTW_CUSTOM_BATTERY_PATH=$(TW_CUSTOM_BATTERY_PATH)
+          # TIDAK ada auto-quoting di Makefile-nya sendiri (beda dari
+          # TW_GIT_REVISION yang memang di-quote manual di Android.mk). Semua
+          # device tree referensi yang terbukti jalan (termasuk TW_BRIGHTNESS_PATH
+          # bawaan vince sendiri, tepat di atas) selalu quote value path-nya.
+          # Tanpa kutip, hasil macro compile-nya berpotensi tidak valid sebagai
+          # string literal C++. Ditambahkan tanda kutip supaya konsisten dan aman.
           # =====================================================================
-          TW_CUSTOM_BATTERY_PATH := /sys/class/power_supply/battery/capacity
+          TW_CUSTOM_BATTERY_PATH := "/sys/class/power_supply/battery/capacity"
 
           # =====================================================================
           # FIX: lag/patah-patah saat swipe, scroll, klik, dan animasi loading

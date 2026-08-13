@@ -277,7 +277,7 @@ jobs:
           # Tanpa kutip, hasil macro compile-nya berpotensi tidak valid sebagai
           # string literal C++. Ditambahkan tanda kutip supaya konsisten dan aman.
           # =====================================================================
-          TW_CUSTOM_BATTERY_PATH := "/sys/class/power_supply/battery/capacity"
+          TW_CUSTOM_BATTERY_PATH := "/sys/class/power_supply/battery"
 
           # =====================================================================
           # FIX: lag/patah-patah saat swipe, scroll, klik, dan animasi loading

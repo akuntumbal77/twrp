@@ -280,6 +280,9 @@ jobs:
           TW_USE_LEGACY_BATTERY_SERVICES := true
           TW_CUSTOM_BATTERY_PATH := "/sys/class/power_supply/battery"
 
+          # Path sensor suhu CPU yang dibaca TWRP (cpu0, dari hasil scan thermal_zone kamu)
+          TW_CUSTOM_CPU_TEMP_PATH := /sys/class/thermal/thermal_zone11/temp
+
           # =====================================================================
           # FIX: lag/patah-patah saat swipe, scroll, klik, dan animasi loading
           # border tidak mulus

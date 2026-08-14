@@ -139,20 +139,20 @@ jobs:
       # Diganti dengan kernel 4.19 khusus vince/mi8953/msm8953 yang sudah
       # support ROM retrofit dynamic partition.
       # =====================================================================
-      - name: Replace Prebuilt Kernel (4.19, fix MADV_WIPEONFORK / dynamic partition support)
+      - name: Replace Prebuilt Kernel (4.9, fix MADV_WIPEONFORK / dynamic partition support)
         run: |
           cd twrp/device/xiaomi/vince
           set -e
-          echo "== Download kernel custom 4.19 =="
+          echo "== Download kernel custom 4.9 =="
           curl -L -o prebuilt/Image.gz-dtb \
             "https://github.com/rahmatsobrian/dummy/raw/refs/heads/main/Image.gz-dtb"
           echo "== Info file kernel =="
           ls -la prebuilt/Image.gz-dtb
           file prebuilt/Image.gz-dtb || true
 
-          echo "== Sesuaikan TARGET_KERNEL_VERSION di BoardConfig.mk (4.9 -> 4.19) =="
+          echo "== Sesuaikan TARGET_KERNEL_VERSION di BoardConfig.mk (4.9 -> 4.9) =="
           grep -n "^TARGET_KERNEL_VERSION" BoardConfig.mk
-          sed -i 's/^TARGET_KERNEL_VERSION := .*/TARGET_KERNEL_VERSION := 4.19/' BoardConfig.mk
+          sed -i 's/^TARGET_KERNEL_VERSION := .*/TARGET_KERNEL_VERSION := 4.9/' BoardConfig.mk
           grep -n "^TARGET_KERNEL_VERSION" BoardConfig.mk
 
           # CATATAN: kernel cmdline / base address / offset TIDAK diubah di
@@ -160,7 +160,7 @@ jobs:
           # antara kernel 4.9 dan 4.19 (cuma kernel space yang beda versi).
           # Kalau boot gagal total (bukan cuma gagal install ROM), kemungkinan
           # BOARD_KERNEL_BASE/BOARD_KERNEL_PAGESIZE/BOARD_KERNEL_TAGS_OFFSET
-          # perlu disesuaikan juga - itu tanda kernel 4.19 ini pakai konfigurasi
+          # perlu disesuaikan juga - itu tanda kernel 4.9 ini pakai konfigurasi
           # mkbootimg yang beda dari yang di-assume BoardConfig.mk sekarang.
           echo "== BOARD_KERNEL_* saat ini (untuk referensi debug kalau boot gagal) =="
           grep "^BOARD_KERNEL_" BoardConfig.mk

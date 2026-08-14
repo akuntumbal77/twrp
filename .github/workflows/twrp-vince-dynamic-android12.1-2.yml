@@ -283,6 +283,11 @@ jobs:
           # Path sensor suhu CPU yang dibaca TWRP (cpu0, dari hasil scan thermal_zone kamu)
           TW_CUSTOM_CPU_TEMP_PATH := /sys/class/thermal/thermal_zone11/temp
 
+          # Path sysfs untuk kontrol brightness (dites manual via adb echo — terbukti nulis & layar berubah)
+          TW_BRIGHTNESS_PATH := /sys/class/leds/lcd-backlight/brightness
+          TW_MAX_BRIGHTNESS := 255
+          TW_DEFAULT_BRIGHTNESS := 150
+
           # =====================================================================
           # FIX: lag/patah-patah saat swipe, scroll, klik, dan animasi loading
           # border tidak mulus

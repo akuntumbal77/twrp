@@ -132,6 +132,66 @@ jobs:
             2>&1 | tee -a /tmp/full_build.log
 
       # =====================================================================
+      # FIX: Getar tidak jalan di TWRP.
+      #
+      # ROOT CAUSE (terkonfirmasi manual via adb shell + dmesg + getevent):
+      # Device vince ini pakai haptic driver "qti-haptics" yang expose diri
+      # lewat Linux input force-feedback subsystem (/dev/input/eventX,
+      # capabilities FF_RUMBLE/FF_CONSTANT/FF_PERIODIC/FF_CUSTOM) - BUKAN
+      # lewat sysfs lawas /sys/class/timed_output/vibrator/enable atau
+      # /sys/class/leds/vibrator/activate yang dipahami TWRP secara native.
+      # Dikonfirmasi node /sys/class/timed_output/ tidak ada sama sekali,
+      # dan /sys/class/leds/ juga tidak punya folder vibrator.
+      #
+      # FIX (rekomendasi RenzAlt): suplai binary HAL
+      # "vendor.qti.hardware.vibrator.service" dari repo
+      # LineageOS/android_vendor_qcom_opensource_vibrator (branch lineage-20.0)
+      # lewat PRODUCT_PACKAGES, supaya TWRP bisa manggil getar lewat HAL
+      # service ini alih-alih akses sysfs langsung.
+      # =====================================================================
+      - name: Clone QTI Vibrator HAL Dependency
+        run: |
+          cd twrp
+          set -e
+
+          echo "== Clone vendor/qcom/opensource/vibrator (qti-haptics HAL, dari rekomendasi RenzAlt) =="
+          git clone --depth=1 \
+            https://github.com/LineageOS/android_vendor_qcom_opensource_vibrator.git \
+            -b lineage-20.0 \
+            vendor/qcom/opensource/vibrator \
+            2>&1 | tee -a /tmp/full_build.log
+
+          echo "== Cek nama module HAL yang tersedia di repo (mastiin nama PRODUCT_PACKAGES benar) =="
+          grep -rn "vendor.qti.hardware.vibrator" vendor/qcom/opensource/vibrator/ || \
+            echo "WARNING: nama module 'vendor.qti.hardware.vibrator.service' tidak ketemu persis di repo — cek manual nama LOCAL_MODULE di Android.bp/Android.mk"
+
+      - name: Add QTI Vibrator HAL to Device Tree
+        run: |
+          cd twrp/device/xiaomi/vince
+          set -e
+
+          MKFILE="device.mk"
+          if [ ! -f "$MKFILE" ]; then
+            MKFILE=$(find . -maxdepth 1 -iname "twrp_vince.mk" | head -1)
+          fi
+
+          if [ -z "$MKFILE" ] || [ ! -f "$MKFILE" ]; then
+            echo "❌ Tidak ketemu device.mk atau twrp_vince.mk, cek struktur device tree manual"
+            exit 1
+          fi
+
+          echo "== Menambahkan PRODUCT_PACKAGES vibrator HAL ke $MKFILE =="
+          cat >> "$MKFILE" << 'EOF'
+
+          # ==== QTI Vibrator HAL (fix getar tidak jalan di TWRP) ====
+          PRODUCT_PACKAGES += \
+              vendor.qti.hardware.vibrator.service
+          EOF
+
+          echo "== Hasil akhir $MKFILE (bagian vibrator) =="
+          tail -n 6 "$MKFILE"
+
+      # =====================================================================
       # GANTI KERNEL PREBUILT: kernel bawaan device tree vince (4.9.291)
       # TERBUKTI tidak support MADV_WIPEONFORK & kemungkinan besar tidak
       # lengkap driver dynamic-partition (device-mapper), menyebabkan

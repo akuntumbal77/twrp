@@ -198,6 +198,25 @@ jobs:
           echo "== Hasil aidl/Android.bp (bagian vendor.qti.hardware.vibrator.impl) =="
           head -20 vendor/qcom/opensource/vibrator/aidl/Android.bp
 
+          # =====================================================================
+          # FIX: error compile "use of undeclared identifier 'open'" /
+          # "assigning to 'int' from incompatible type 'void'" di Vibrator.cpp
+          # (4 titik: line 127, 391, 404, 724 - semua pemanggilan open()).
+          #
+          # ROOT CAUSE (dikonfirmasi dari isi asli Vibrator.cpp branch lineage-20.0
+          # ini): file ini include <dirent.h>, <unistd.h>, <sys/ioctl.h>, dll, tapi
+          # TIDAK PERNAH include <fcntl.h> - padahal open()/O_RDWR/O_WRONLY
+          # dideklarasikan di situ. Build environment TWRP di sini pakai flag
+          # compiler -nostdlibinc (no implicit stdlib include path), jadi symbol
+          # open() tidak ke-resolve sama sekali tanpa include eksplisit. Ini murni
+          # header yang kurang di source aslinya, bukan soal SOONG_CONFIG atau
+          # qti_vibrator_hal_defaults yang sudah dipatch sebelumnya.
+          # =====================================================================
+          echo "== Patch Vibrator.cpp: tambah #include <fcntl.h> yang hilang =="
+          sed -i '/#include <dirent.h>/a #include <fcntl.h>' vendor/qcom/opensource/vibrator/aidl/Vibrator.cpp
+          echo "== Hasil include block Vibrator.cpp =="
+          sed -n '35,50p' vendor/qcom/opensource/vibrator/aidl/Vibrator.cpp
+
           echo "== Cek nama module HAL yang tersedia di repo (mastiin nama PRODUCT_PACKAGES benar) =="
           grep -rn "vendor.qti.hardware.vibrator" vendor/qcom/opensource/vibrator/ || \
             echo "WARNING: nama module 'vendor.qti.hardware.vibrator.service' tidak ketemu persis di repo — cek manual nama LOCAL_MODULE di Android.bp/Android.mk"

@@ -176,6 +176,28 @@ jobs:
             vendor/qcom/opensource/vibrator \
             2>&1 | tee -a /tmp/full_build.log
 
+          # =====================================================================
+          # FIX: "vendor.qti.hardware.vibrator.impl" depends on undefined module
+          # "qti_vibrator_hal_defaults"
+          #
+          # ROOT CAUSE (dikonfirmasi via aidl/Android.bp repo ini + device tree
+          # lain yang ngalamin error identik - bleedingedgeandroid/device_xiaomi_spes):
+          # aidl/Android.bp branch lineage-20.0 ini punya reference orphan/rusak ke
+          # cc_defaults "qti_vibrator_hal_defaults" yang TIDAK PERNAH didefinisikan
+          # di manapun dalam repo ini (bukan di aidl/Android.bp, bukan di
+          # effect/Android.bp) - bukan soal SOONG_CONFIG yang kurang di-set (itu
+          # dugaan sebelumnya yang ternyata salah, ketuker sama branch lineage-21.0
+          # yang punya arsitektur beda).
+          #
+          # FIX resmi dari komunitas: hapus reference "qti_vibrator_hal_defaults"
+          # dari defaults list. Modul tetap compile normal tanpa itu - cc_defaults
+          # di sini cuma nambahin cflags tambahan, bukan dependency wajib.
+          # =====================================================================
+          echo "== Patch aidl/Android.bp: hapus reference orphan qti_vibrator_hal_defaults =="
+          sed -i '/defaults: \[/,/\],/{/"qti_vibrator_hal_defaults",/d}' vendor/qcom/opensource/vibrator/aidl/Android.bp
+          echo "== Hasil aidl/Android.bp (bagian vendor.qti.hardware.vibrator.impl) =="
+          head -20 vendor/qcom/opensource/vibrator/aidl/Android.bp
+
           echo "== Cek nama module HAL yang tersedia di repo (mastiin nama PRODUCT_PACKAGES benar) =="
           grep -rn "vendor.qti.hardware.vibrator" vendor/qcom/opensource/vibrator/ || \
             echo "WARNING: nama module 'vendor.qti.hardware.vibrator.service' tidak ketemu persis di repo — cek manual nama LOCAL_MODULE di Android.bp/Android.mk"

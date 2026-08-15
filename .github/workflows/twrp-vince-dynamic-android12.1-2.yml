@@ -207,6 +207,56 @@ jobs:
           tail -n 6 "$MKFILE"
 
       # =====================================================================
+      # FIX TAMBAHAN: Vibrator HAL sudah di-compile lewat PRODUCT_PACKAGES di
+      # step sebelumnya, TAPI PRODUCT_PACKAGES saja TIDAK cukup buat TWRP.
+      #
+      # ROOT CAUSE (dikonfirmasi dari perbandingan device tree TWRP vince asli
+      # vs device tree TWRP lain yang sudah proven working untuk vibrator,
+      # mis. Redmi Note 11/spes): PRODUCT_PACKAGES cuma nyuruh build system
+      # nge-compile modul itu sebagai bagian dari target Android PENUH
+      # (system/vendor.img). TWRP build ramdisk recovery-nya SENDIRI, terpisah
+      # dari proses itu - modul yang cuma didaftarkan lewat PRODUCT_PACKAGES
+      # TIDAK otomatis ikut ke-copy ke dalam recovery.img.
+      #
+      # Device tree TWRP vince aslinya SUDAH punya pola yang benar buat kasus
+      # ini (dipakai buat libdrm, libion, libkeymaster3device, vendor.display.
+      # config) lewat 2 variable BoardConfig.mk:
+      #   - TARGET_RECOVERY_DEVICE_MODULES: paksa modul di-copy ke ramdisk
+      #     recovery (bukan cuma ke-compile buat vendor.img biasa)
+      #   - TW_RECOVERY_ADDITIONAL_RELINK_LIBRARY_FILES: pastikan file .so
+      #     pendukungnya ikut di-relink ke binary recovery utama, supaya
+      #     symbol-nya kebaca dan gak silent-fail pas dipanggil
+      #
+      # Step ini nambahin modul vibrator ke pola yang sama, TANPA mengubah
+      # baris lain yang sudah ada di BoardConfig.mk.
+      # =====================================================================
+      - name: Add Vibrator Modules to TARGET_RECOVERY_DEVICE_MODULES
+        run: |
+          cd twrp/device/xiaomi/vince
+          set -e
+
+          echo "== Sebelum (grep TARGET_RECOVERY_DEVICE_MODULES / RELINK di BoardConfig.mk) =="
+          grep -n "TARGET_RECOVERY_DEVICE_MODULES\|TW_RECOVERY_ADDITIONAL_RELINK_LIBRARY_FILES" BoardConfig.mk || true
+
+          cat >> BoardConfig.mk << 'EOF'
+
+          # ==== QTI Vibrator HAL: masukin ke ramdisk recovery TWRP ====
+          # (PRODUCT_PACKAGES di device.mk/twrp_vince.mk cuma compile modulnya,
+          # TIDAK otomatis masuk ramdisk recovery - makanya perlu 2 baris ini)
+          TARGET_RECOVERY_DEVICE_MODULES += \
+              vendor.qti.hardware.vibrator.service \
+              vendor.qti.hardware.vibrator.impl \
+              libqtivibratoreffect
+
+          TW_RECOVERY_ADDITIONAL_RELINK_LIBRARY_FILES += \
+              $(TARGET_OUT_VENDOR_SHARED_LIBRARIES)/vendor.qti.hardware.vibrator.impl.so \
+              $(TARGET_OUT_VENDOR_SHARED_LIBRARIES)/libqtivibratoreffect.so
+          EOF
+
+          echo "== Sesudah (hasil akhir bagian vibrator di BoardConfig.mk) =="
+          tail -n 12 BoardConfig.mk
+
+      # =====================================================================
       # GANTI KERNEL PREBUILT: kernel bawaan device tree vince (4.9.291)
       # TERBUKTI tidak support MADV_WIPEONFORK & kemungkinan besar tidak
       # lengkap driver dynamic-partition (device-mapper), menyebabkan

@@ -201,6 +201,13 @@ jobs:
           # ==== QTI Vibrator HAL (fix getar tidak jalan di TWRP) ====
           PRODUCT_PACKAGES += \
               vendor.qti.hardware.vibrator.service
+
+          # ==== Soong config variant buat vendor.qti.hardware.vibrator.impl ====
+          # Tanpa ini, Soong gagal generate "qti_vibrator_hal_defaults" karena
+          # gak tau varian mana yang harus dipakai (platform S/12 vs T/13 dst)
+          SOONG_CONFIG_NAMESPACES += vibrator
+          SOONG_CONFIG_vibrator += vibratortargets
+          SOONG_CONFIG_vibrator_vibratortargets := vibratoraidlV2platformtarget
           EOF
 
           echo "== Hasil akhir $MKFILE (bagian vibrator) =="

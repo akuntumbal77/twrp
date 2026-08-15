@@ -154,6 +154,21 @@ jobs:
           cd twrp
           set -e
 
+          # =====================================================================
+          # FIX: "fatal: destination path 'vendor/qcom/opensource/vibrator'
+          # already exists and is not an empty directory."
+          #
+          # ROOT CAUSE: folder vendor/qcom/opensource/vibrator ini udah
+          # ke-sync duluan sebagai bagian dari base manifest
+          # minimal-manifest-twrp (twrp-12.1) di step "Init & Sync TWRP
+          # Manifest" sebelumnya. Isinya HAL vibrator versi lama/generic
+          # bawaan manifest, bukan versi qti-haptics yang kita butuhin.
+          # git clone menolak nulis ke folder yang udah ada isinya, jadi
+          # perlu dihapus dulu sebelum clone versi LineageOS yang bener.
+          # =====================================================================
+          echo "== Hapus folder vibrator bawaan manifest (kalau ada) =="
+          rm -rf vendor/qcom/opensource/vibrator
+
           echo "== Clone vendor/qcom/opensource/vibrator (qti-haptics HAL, dari rekomendasi RenzAlt) =="
           git clone --depth=1 \
             https://github.com/LineageOS/android_vendor_qcom_opensource_vibrator.git \

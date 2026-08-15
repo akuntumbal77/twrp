@@ -298,6 +298,63 @@ jobs:
           tail -n 12 BoardConfig.mk
 
       # =====================================================================
+      # FIX: getar masih tidak jalan meski binary vibrator HAL sudah
+      # ke-compile & masuk ramdisk (TARGET_RECOVERY_DEVICE_MODULES).
+      #
+      # ROOT CAUSE (dikonfirmasi dari recovery.log + logcat + dmesg saat
+      # testing: kernel driver "qti-haptics" terkonfirmasi ter-load normal
+      # sebagai input5, TAPI tidak ada satupun baris yang menyebut
+      # "vendor.qti.hardware.vibrator" di ketiga log tersebut - service-nya
+      # tidak pernah dijalankan sama sekali):
+      #
+      # File .rc bawaan HAL ini (vendor.qti.hardware.vibrator.service.rc,
+      # isinya "service vendor.qti.vibrator ... class hal" + trigger
+      # "on late-init") normalnya di-install Soong ke /vendor/etc/init/
+      # lewat property init_rc di Android.bp - TAPI ini cuma jalan otomatis
+      # di boot Android PENUH yang init-nya scan & import semua
+      # /vendor/etc/init/*.rc. TWRP recovery init TIDAK melakukan itu -
+      # dia cuma parse rc file yang secara eksplisit di-import di
+      # init.recovery.*.rc device tree sendiri (sama seperti kenapa
+      # merge-fstab.sh sebelumnya harus didaftarkan manual, bukan otomatis
+      # jalan). Class "hal" & trigger "late-init" juga tidak reliable di
+      # konteks minimal init recovery.
+      #
+      # FIX: definisikan service ini langsung inline di init.recovery.*.rc
+      # device tree, pakai trigger "on init" + start eksplisit - pola yang
+      # sudah terbukti jalan (sama seperti merge-fstab.sh).
+      # =====================================================================
+      - name: Register Vibrator HAL Service in TWRP Init
+        run: |
+          cd twrp/device/xiaomi/vince
+          set -e
+
+          INIT_RC=$(find recovery/root -maxdepth 1 -iname "init.recovery.*.rc" | head -1)
+          if [ -z "$INIT_RC" ]; then
+            INIT_RC="recovery/root/init.recovery.msm8953.rc"
+            touch "$INIT_RC"
+          fi
+
+          # Hapus registrasi lama kalau ada, dari run sebelumnya
+          sed -i '/service vendor_vibrator/,/^$/d' "$INIT_RC" 2>/dev/null || true
+          sed -i '/start vendor_vibrator/d' "$INIT_RC" 2>/dev/null || true
+
+          cat >> "$INIT_RC" << 'EOF'
+
+          service vendor_vibrator /vendor/bin/hw/vendor.qti.hardware.vibrator.service
+              class core
+              user system
+              group system input
+
+          on init
+              chown system system /sys/class/qcom-haptics/primitive_duration
+              chmod 0600 /sys/class/qcom-haptics/primitive_duration
+              start vendor_vibrator
+          EOF
+
+          echo "== Isi $INIT_RC (bagian vibrator service) =="
+          grep -B 1 -A 6 "vendor_vibrator" "$INIT_RC"
+
+      # =====================================================================
       # GANTI KERNEL PREBUILT: kernel bawaan device tree vince (4.9.291)
       # TERBUKTI tidak support MADV_WIPEONFORK & kemungkinan besar tidak
       # lengkap driver dynamic-partition (device-mapper), menyebabkan

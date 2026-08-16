@@ -122,6 +122,71 @@ jobs:
       - name: Check Disk Space (after repo sync)
         run: df -h
 
+      # =====================================================================
+      # FIX: TWRP GUI vibration feedback tidak jalan ("Cannot find file
+      # /sys/class/timed_output/vibrator/enable" di recovery.log), padahal
+      # device pakai HAL AIDL vibrator (vendor.qti.hardware.vibrator.service)
+      # yang disuplai lewat step "Clone QTI Vibrator HAL Dependency" di bawah.
+      #
+      # ROOT CAUSE (dikonfirmasi langsung dari source bootable/recovery,
+      # branch android-12.1, file minuitwrp/events.cpp + libminuitwrp_defaults.go):
+      # TWRP SUDAH punya dukungan resmi buat manggil HAL vibrator AIDL
+      # (vibrate() di events.cpp punya cabang #elif defined(USE_QTI_AIDL_HAPTICS)
+      # yang manggil IVibrator::fromBinder(...) - persis service yang kita build).
+      # TAPI macro USE_QTI_AIDL_HAPTICS ini TIDAK PERNAH di-generate oleh
+      # libminuitwrp_defaults.go (script Soong yang convert variable BoardConfig.mk
+      # jadi compiler flag). Fungsi globalSharedLibs() di file itu MEMANG cek
+      # TW_SUPPORT_INPUT_AIDL_HAPTICS untuk link library AIDL vibrator,
+      # tapi fungsi globalFlags() (yang generate -D flag) tidak punya logic
+      # yang sama - jadi library ke-link tapi kode di events.cpp tetap
+      # fallback ke default /sys/class/timed_output yang tidak ada di device
+      # ini. Ini gap asli di source TWRP, bukan salah konfigurasi kita.
+      #
+      # FIX: patch libminuitwrp_defaults.go supaya globalFlags() juga
+      # generate -DUSE_QTI_AIDL_HAPTICS saat TW_SUPPORT_INPUT_AIDL_HAPTICS
+      # diset true (diset di step "Patch Device Tree for Dynamic Partition"),
+      # menyamakan perilakunya dengan globalSharedLibs().
+      # =====================================================================
+      - name: Patch TWRP Source for AIDL Haptics Support
+        run: |
+          cd twrp/bootable/recovery
+          set -e
+
+          echo "== Sebelum patch (globalFlags belum generate USE_QTI_AIDL_HAPTICS) =="
+          grep -n "USE_QTI_AIDL_HAPTICS" minuitwrp/libminuitwrp_defaults.go || echo "belum ada, seperti dugaan"
+
+          python3 - << 'PYEOF'
+          path = "minuitwrp/libminuitwrp_defaults.go"
+          with open(path) as f:
+              content = f.read()
+
+          old = '''\t\t\tcflags = append(cflags, "-DTW_ROTATION=0")
+          \t\t}
+          \t}
+          \treturn cflags
+          }'''
+
+          new = '''\t\t\tcflags = append(cflags, "-DTW_ROTATION=0")
+          \t\t}
+          \t}
+
+          \tif getMakeVars(ctx, "TW_SUPPORT_INPUT_AIDL_HAPTICS") == "true" {
+          \t\tcflags = append(cflags, "-DUSE_QTI_AIDL_HAPTICS")
+          \t}
+
+          \treturn cflags
+          }'''
+
+          assert content.count(old) == 1, f"Pola tidak ketemu persis 1x (ketemu {content.count(old)}x) - source TWRP mungkin sudah berubah, cek manual"
+          content = content.replace(old, new)
+          with open(path, "w") as f:
+              f.write(content)
+          print("Patch berhasil diterapkan")
+          PYEOF
+
+          echo "== Sesudah patch =="
+          grep -n -B2 -A2 "USE_QTI_AIDL_HAPTICS" minuitwrp/libminuitwrp_defaults.go
+
       - name: Clone Device Tree (vince)
         run: |
           cd twrp
@@ -525,6 +590,19 @@ jobs:
           # signifikan.
           # =====================================================================
           TW_FRAMERATE := 60
+
+          # =====================================================================
+          # FIX: getar TWRP GUI (feedback tap tombol/menu) tidak jalan karena
+          # device tidak punya sysfs legacy /sys/class/timed_output. Flag ini
+          # men-trigger link library AIDL vibrator lewat globalSharedLibs() di
+          # libminuitwrp_defaults.go (bootable/recovery), DAN dipasangkan
+          # dengan patch source di step "Patch TWRP Source for AIDL Haptics
+          # Support" di atas yang menambahkan generate -DUSE_QTI_AIDL_HAPTICS
+          # (macro ini yang sebenarnya switch code path vibrate() di
+          # events.cpp supaya manggil vendor.qti.hardware.vibrator.service
+          # lewat AIDL binder, bukan sysfs timed_output yang tidak ada).
+          # =====================================================================
+          TW_SUPPORT_INPUT_AIDL_HAPTICS := true
 
           # =====================================================================
           # Aktifkan tombol "Reboot to EDL" di menu Reboot TWRP.

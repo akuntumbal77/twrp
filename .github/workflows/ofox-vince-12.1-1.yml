@@ -444,17 +444,12 @@ jobs:
       # device dari BASH_SOURCE/BASH_ARGV - deteksi ini TIDAK reliable di
       # environment CI GitHub Actions (build sebelumnya kebukti field
       # Maintainer kosong di layar recovery walau var ini sudah di-export
-      # di sini). Makanya OF_MAINTAINER & FOX_MAINTAINER_PATCH_VERSION
-      # SEKARANG JUGA di-export ulang secara eksplisit (tanpa bergantung
-      # guard apapun) di step "Start Build" di bawah - itu satu-satunya
-      # export yang benar-benar dijamin jalan.
+      # di sini). Makanya OF_MAINTAINER SEKARANG JUGA di-export ulang
+      # secara eksplisit (tanpa bergantung guard apapun) di step
+      # "Start Build" di bawah - itu satu-satunya export yang benar-benar
+      # dijamin jalan.
       #
       # Var yang dipilih relevan buat vince:
-      # - FOX_MAINTAINER_PATCH_VERSION: [NEW] menambahkan identitas versi
-      #   custom (tanpa mengubah nomor rilis resmi OrangeFox yang sekarang
-      #   auto-determined) - hasilnya versi jadi tampil "R12.0_RahmatSobrian"
-      #   di layar recovery, bukan cuma "R12.0" polos. var lama FOX_VERSION
-      #   sudah [OBSOLETE] menurut wiki resmi, tidak dipakai lagi.
       # - OF_PATCH_AVB20: A-only Xiaomi MIUI device (vince persis kriteria
       #   ini) - supaya OrangeFox gak ketimpa recovery stok MIUI pas boot ROM
       # - FOX_RECOVERY_SYSTEM_PARTITION / FOX_RECOVERY_VENDOR_PARTITION:
@@ -506,7 +501,6 @@ jobs:
           if [ "$1" = "$FDEVICE" ] || [ "$FOX_BUILD_DEVICE" = "$FDEVICE" ]; then
 
               export OF_MAINTAINER="RahmatSobrian"
-              export FOX_MAINTAINER_PATCH_VERSION="RahmatSobrian"
               export FOX_BUILD_TYPE="Unofficial-CI"
 
               # A-only Xiaomi MIUI device - cegah MIUI stock recovery
@@ -647,14 +641,14 @@ jobs:
       # lunch twrp_${DEVICE}-eng (branch 12.1 >= 11, sesuai kondisi
       # BRANCH_INT resmi), mka $TARGET.
       #
-      # FIX MAINTAINER: OF_MAINTAINER & FOX_MAINTAINER_PATCH_VERSION
-      # di-export LANGSUNG di sini sebagai fallback yang dijamin jalan,
-      # karena guard deteksi device di vendorsetup.sh (BASH_SOURCE/
-      # BASH_ARGV) terbukti tidak reliable di runner GitHub Actions - build
-      # sebelumnya kebukti field "Maintainer" kosong di layar OrangeFox
-      # walau var yang sama sudah didefinisikan di vendorsetup.sh. Export
-      # di sini dilakukan SEBELUM ". build/envsetup.sh" sehingga pasti
-      # sudah ada di environment terlepas dari berhasil/gagalnya guard.
+      # FIX MAINTAINER: OF_MAINTAINER di-export LANGSUNG di sini sebagai
+      # fallback yang dijamin jalan, karena guard deteksi device di
+      # vendorsetup.sh (BASH_SOURCE/BASH_ARGV) terbukti tidak reliable di
+      # runner GitHub Actions - build sebelumnya kebukti field "Maintainer"
+      # kosong di layar OrangeFox walau var yang sama sudah didefinisikan
+      # di vendorsetup.sh. Export di sini dilakukan SEBELUM
+      # ". build/envsetup.sh" sehingga pasti sudah ada di environment
+      # terlepas dari berhasil/gagalnya guard.
       # =====================================================================
       - name: Start Build (with log)
         working-directory: ${{ env.SYNC_PATH }}
@@ -674,7 +668,6 @@ jobs:
 
           # Fallback eksplisit - jangan cuma andalin guard vendorsetup.sh
           export OF_MAINTAINER="RahmatSobrian"
-          export FOX_MAINTAINER_PATCH_VERSION="RahmatSobrian"
 
           if [ -n "${MAGISK_ZIP:-}" ]; then
             export FOX_USE_SPECIFIC_MAGISK_ZIP="$MAGISK_ZIP"
@@ -705,7 +698,6 @@ jobs:
 
           echo "== Verifikasi OF_MAINTAINER sebelum compile =="
           echo "OF_MAINTAINER=$OF_MAINTAINER" | tee -a /tmp/full_build.log
-          echo "FOX_MAINTAINER_PATCH_VERSION=$FOX_MAINTAINER_PATCH_VERSION" | tee -a /tmp/full_build.log
 
           mka -j$(nproc --all) "${{ env.TARGET }}" 2>&1 | tee logs/build.txt | tee -a /tmp/full_build.log
 

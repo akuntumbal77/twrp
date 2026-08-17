@@ -72,12 +72,12 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: |
           BUILD_DATE=$(date +"%Y-%m-%d %H:%M:%S UTC")
-          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+          curl -s -w "\n[TG_HTTP:%{http_code}]" -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TG_CHAT_ID}" \
             -d parse_mode="Markdown" \
             -d text="🦊 *OrangeFox Build Started*
             📱 *Device:* Xiaomi Redmi 5 Plus (vince) - mi8953
-            🌿 *FOX_BRANCH:* ${{ env.FOX_BRANCH }}
+            🌿 *Branch:* `${{ env.FOX_BRANCH }}`
             🕒 *Time:* ${BUILD_DATE}
             🔗 [GitHub Actions](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
 
@@ -110,12 +110,12 @@ jobs:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: |
-          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+          curl -s -w "\n[TG_HTTP:%{http_code}]" -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TG_CHAT_ID}" \
             -d parse_mode="Markdown" \
             -d text="🔄 *Syncing OrangeFox Sources...*
-            📦 Sync script: OrangeFox/sync (orangefox_sync.sh)
-            🌿 Branch: ${{ env.FOX_BRANCH }}
+            📦 Sync script: OrangeFox/sync (`orangefox_sync.sh`)
+            🌿 Branch: `${{ env.FOX_BRANCH }}`
             ⚙️ Harap tunggu, ini biasanya paling lama..."
 
       # =====================================================================
@@ -273,7 +273,9 @@ jobs:
           # be processed properly, or at all, if they are in any .mk file -
           # they must be in a script, or exported manually at the command
           # line." Semua var OF_MAINTAINER dkk ditaruh di step
-          # "Create vendorsetup.sh (OrangeFox build vars)" di bawah.
+          # "Create vendorsetup.sh (OrangeFox build vars)" di bawah, DAN
+          # sekarang juga di-export ulang sebagai fallback di step
+          # "Start Build" - lihat catatan di step tersebut.
 
           # ===================================================================
           # Fix fstab/merge-fstab: PERSIS pola yang sama kayak TWRP 12.1 -
@@ -438,7 +440,21 @@ jobs:
       # karena vendorsetup.sh di-source untuk SEMUA device tree yang ada di
       # source, jadi var-nya harus dibatasi cuma aktif pas lunch/build vince.
       #
+      # CATATAN FIX MAINTAINER: guard "FOX_BUILD_DEVICE" di sini deteksi
+      # device dari BASH_SOURCE/BASH_ARGV - deteksi ini TIDAK reliable di
+      # environment CI GitHub Actions (build sebelumnya kebukti field
+      # Maintainer kosong di layar recovery walau var ini sudah di-export
+      # di sini). Makanya OF_MAINTAINER & FOX_MAINTAINER_PATCH_VERSION
+      # SEKARANG JUGA di-export ulang secara eksplisit (tanpa bergantung
+      # guard apapun) di step "Start Build" di bawah - itu satu-satunya
+      # export yang benar-benar dijamin jalan.
+      #
       # Var yang dipilih relevan buat vince:
+      # - FOX_MAINTAINER_PATCH_VERSION: [NEW] menambahkan identitas versi
+      #   custom (tanpa mengubah nomor rilis resmi OrangeFox yang sekarang
+      #   auto-determined) - hasilnya versi jadi tampil "R12.0_RahmatSobrian"
+      #   di layar recovery, bukan cuma "R12.0" polos. var lama FOX_VERSION
+      #   sudah [OBSOLETE] menurut wiki resmi, tidak dipakai lagi.
       # - OF_PATCH_AVB20: A-only Xiaomi MIUI device (vince persis kriteria
       #   ini) - supaya OrangeFox gak ketimpa recovery stok MIUI pas boot ROM
       # - FOX_RECOVERY_SYSTEM_PARTITION / FOX_RECOVERY_VENDOR_PARTITION:
@@ -449,7 +465,8 @@ jobs:
       #   dynamic partitions") karena PRODUCT_USE_DYNAMIC_PARTITIONS belum
       #   diset - sudah difix di step "Enable PRODUCT_USE_DYNAMIC_PARTITIONS
       #   in device.mk" (setelah step "Patch Device Tree for Dynamic
-      #   Partition"), jadi flag ini diaktifkan lagi.
+      #   Partition"), jadi flag ini diaktifkan lagi. Wiki resmi konfirmasi:
+      #   flag ini otomatis juga mengaktifkan OF_ENABLE_LPTOOLS.
       # - OF_FORCE_PREBUILT_KERNEL: sesuai Building Tip H resmi - wajib kalau
       #   kernel-nya prebuilt (persis kasus kita, lihat step "Replace
       #   Prebuilt Kernel") buat menghindari error "NO KERNEL CONFIG".
@@ -489,6 +506,7 @@ jobs:
           if [ "$1" = "$FDEVICE" ] || [ "$FOX_BUILD_DEVICE" = "$FDEVICE" ]; then
 
               export OF_MAINTAINER="RahmatSobrian"
+              export FOX_MAINTAINER_PATCH_VERSION="RahmatSobrian"
               export FOX_BUILD_TYPE="Unofficial-CI"
 
               # A-only Xiaomi MIUI device - cegah MIUI stock recovery
@@ -584,11 +602,11 @@ jobs:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: |
-          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+          curl -s -w "\n[TG_HTTP:%{http_code}]" -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TG_CHAT_ID}" \
             -d parse_mode="Markdown" \
             -d text="⚙️ *Compiling OrangeFox...*
-            📱 *Target:* twrp_vince-eng
+            📱 *Target:* `twrp_vince-eng`
             🧵 *Threads:* $(nproc --all) cores
             🔨 Build sedang berjalan, harap tunggu..."
 
@@ -609,7 +627,7 @@ jobs:
 
               if [ "$USAGE" -ge 85 ] && [ "$ALERTED" = false ]; then
                 ALERTED=true
-                curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+                curl -s -w "\n[TG_HTTP:%{http_code}]" -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
                   -d chat_id="${TG_CHAT_ID}" \
                   -d parse_mode="Markdown" \
                   -d text="⚠️ *Disk Space Kritis!*
@@ -628,6 +646,15 @@ jobs:
       # ALLOW_MISSING_DEPENDENCIES + FOX_USE_TWRP_RECOVERY_IMAGE_BUILDER,
       # lunch twrp_${DEVICE}-eng (branch 12.1 >= 11, sesuai kondisi
       # BRANCH_INT resmi), mka $TARGET.
+      #
+      # FIX MAINTAINER: OF_MAINTAINER & FOX_MAINTAINER_PATCH_VERSION
+      # di-export LANGSUNG di sini sebagai fallback yang dijamin jalan,
+      # karena guard deteksi device di vendorsetup.sh (BASH_SOURCE/
+      # BASH_ARGV) terbukti tidak reliable di runner GitHub Actions - build
+      # sebelumnya kebukti field "Maintainer" kosong di layar OrangeFox
+      # walau var yang sama sudah didefinisikan di vendorsetup.sh. Export
+      # di sini dilakukan SEBELUM ". build/envsetup.sh" sehingga pasti
+      # sudah ada di environment terlepas dari berhasil/gagalnya guard.
       # =====================================================================
       - name: Start Build (with log)
         working-directory: ${{ env.SYNC_PATH }}
@@ -644,6 +671,11 @@ jobs:
           # before building" - wajib biar guard di vendorsetup.sh kepicu
           # dengan pasti, gak cuma mengandalkan deteksi BASH_ARGV dari lunch.
           export FOX_BUILD_DEVICE="${{ env.DEVICE }}"
+
+          # Fallback eksplisit - jangan cuma andalin guard vendorsetup.sh
+          export OF_MAINTAINER="RahmatSobrian"
+          export FOX_MAINTAINER_PATCH_VERSION="RahmatSobrian"
+
           if [ -n "${MAGISK_ZIP:-}" ]; then
             export FOX_USE_SPECIFIC_MAGISK_ZIP="$MAGISK_ZIP"
           fi
@@ -670,6 +702,10 @@ jobs:
             echo "❌ TARGET_PRODUCT salah: $TARGET_PRODUCT" | tee -a /tmp/full_build.log
             exit 1
           fi
+
+          echo "== Verifikasi OF_MAINTAINER sebelum compile =="
+          echo "OF_MAINTAINER=$OF_MAINTAINER" | tee -a /tmp/full_build.log
+          echo "FOX_MAINTAINER_PATCH_VERSION=$FOX_MAINTAINER_PATCH_VERSION" | tee -a /tmp/full_build.log
 
           mka -j$(nproc --all) "${{ env.TARGET }}" 2>&1 | tee logs/build.txt | tee -a /tmp/full_build.log
 
@@ -738,12 +774,12 @@ jobs:
           BUILD_DATE=$(date +"%Y-%m-%d %H:%M:%S UTC")
           IMG_SIZE=$(du -sh "${{ env.SYNC_PATH }}/out/target/product/${{ env.DEVICE }}/recovery.img" 2>/dev/null | cut -f1 || echo "N/A")
           DISK_FINAL=$(df -h / | tail -1 | awk '{print "Terpakai "$5" (sisa "$4")"}')
-          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+          curl -s -w "\n[TG_HTTP:%{http_code}]" -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TG_CHAT_ID}" \
             -d parse_mode="Markdown" \
             -d text="✅ *OrangeFox Build Sukses!*
             📱 *Device:* Xiaomi Redmi 5 Plus (vince) - mi8953
-            🌿 *FOX_BRANCH:* ${{ env.FOX_BRANCH }}
+            🌿 *Branch:* `${{ env.FOX_BRANCH }}`
             📦 *Image Size:* ${IMG_SIZE}
             💾 *Disk saat selesai:* ${DISK_FINAL}
             🕒 *Selesai:* ${BUILD_DATE}
@@ -758,7 +794,7 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: |
           if [ -f /tmp/disk_monitor.log ]; then
-            curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
+            curl -s -w "\n[TG_HTTP:%{http_code}]" -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
               -F chat_id="${TG_CHAT_ID}" \
               -F document=@/tmp/disk_monitor.log \
               -F caption="💾 Disk usage log tiap 2 menit selama build (OrangeFox vince, FAILED)"
@@ -782,12 +818,12 @@ jobs:
             FILE_SIZE=$(du -m "$LOG_FILE" | cut -f1)
             if [ "$FILE_SIZE" -gt 45 ]; then
               gzip -k "$LOG_FILE"
-              curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
+              curl -s -w "\n[TG_HTTP:%{http_code}]" -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
                 -F chat_id="${TG_CHAT_ID}" \
                 -F document=@"${LOG_FILE}.gz" \
                 -F caption="📄 Full build log (compressed) - OrangeFox vince (FAILED)"
             else
-              curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
+              curl -s -w "\n[TG_HTTP:%{http_code}]" -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
                 -F chat_id="${TG_CHAT_ID}" \
                 -F document=@"${LOG_FILE}" \
                 -F caption="📄 Full build log - OrangeFox vince (FAILED)"
@@ -802,13 +838,13 @@ jobs:
         run: |
           BUILD_DATE=$(date +"%Y-%m-%d %H:%M:%S UTC")
           DISK_FINAL=$(df -h / | tail -1 | awk '{print "Terpakai "$5" (sisa "$4")"}' 2>/dev/null || echo "N/A")
-          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+          curl -s -w "\n[TG_HTTP:%{http_code}]" -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TG_CHAT_ID}" \
             -d parse_mode="Markdown" \
             -d text="❌ *OrangeFox Build GAGAL!*
             📱 *Device:* Xiaomi Redmi 5 Plus (vince) - mi8953
-            🌿 *FOX_BRANCH:* ${{ env.FOX_BRANCH }}
+            🌿 *Branch:* `${{ env.FOX_BRANCH }}`
             💾 *Disk saat gagal:* ${DISK_FINAL}
             🕒 *Waktu:* ${BUILD_DATE}
-            📄 Full log & disk_monitor.log sudah dikirim/tersedia di artifacts.
+            📄 Full log & `disk_monitor.log` sudah dikirim/tersedia di artifacts.
             🔗 [Lihat Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"

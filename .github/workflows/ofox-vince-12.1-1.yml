@@ -378,6 +378,55 @@ jobs:
           tail -n 30 BoardConfig.mk
 
       # =====================================================================
+      # FIX build error: "OF_ENABLE_ALL_PARTITION_TOOLS" requires dynamic
+      # partitions; quitting (orangefox.mk fox_12.1, ~baris 492).
+      #
+      # ROOT CAUSE: BoardConfig.mk kita cuma set BOARD_SUPER_PARTITION_* +
+      # TW_INCLUDE_LOGICAL (dipakai liblp/TWRP buat baca metadata super).
+      # orangefox.mk cek penanda dynamic-partition STANDAR AOSP yang
+      # berbeda - PRODUCT_USE_DYNAMIC_PARTITIONS - yang normalnya diset di
+      # device.mk (bukan BoardConfig.mk), dan device tree vince ini gak
+      # pernah menyetelnya. Dua var ini gak saling menggantikan: yang satu
+      # dibaca tooling image (liblp), yang satu dibaca Makefile OrangeFox.
+      #
+      # FIX: tambahkan PRODUCT_USE_DYNAMIC_PARTITIONS := true di device.mk,
+      # plus PRODUCT_RETROFIT_DYNAMIC_PARTITIONS := true karena device ini
+      # dynamic partition RETROFIT (super menumpang di partisi fisik lama
+      # cust+system, bukan partisi "super" native bawaan pabrik) - sesuai
+      # dokumentasi resmi AOSP dynamic partitions
+      # (source.android.com/docs/core/ota/dynamic_partitions/implement).
+      # =====================================================================
+      - name: Enable PRODUCT_USE_DYNAMIC_PARTITIONS in device.mk
+        run: |
+          cd "${{ env.SYNC_PATH }}/device/${{ env.OEM }}/${{ env.DEVICE }}"
+          set -e
+
+          MKFILE="device.mk"
+          if [ ! -f "$MKFILE" ]; then
+            MKFILE=$(find . -maxdepth 1 -iname "twrp_vince.mk" | head -1)
+          fi
+          if [ -z "$MKFILE" ] || [ ! -f "$MKFILE" ]; then
+            echo "❌ Tidak ketemu device.mk atau twrp_vince.mk, cek struktur device tree manual"
+            exit 1
+          fi
+
+          echo "== Sebelum (grep PRODUCT_USE_DYNAMIC_PARTITIONS di $MKFILE) =="
+          grep -n "PRODUCT_USE_DYNAMIC_PARTITIONS\|PRODUCT_RETROFIT_DYNAMIC_PARTITIONS" "$MKFILE" || true
+
+          cat >> "$MKFILE" << 'EOF'
+
+          # ==== Dynamic Partitions (penanda standar AOSP, dibaca orangefox.mk) ====
+          # Diperlukan supaya OF_ENABLE_ALL_PARTITION_TOOLS bisa diaktifkan.
+          # Retrofit=true karena super menumpang di partisi fisik lama
+          # (cust+system), bukan partisi "super" native.
+          PRODUCT_USE_DYNAMIC_PARTITIONS := true
+          PRODUCT_RETROFIT_DYNAMIC_PARTITIONS := true
+          EOF
+
+          echo "== Sesudah (hasil akhir bagian dynamic partition di $MKFILE) =="
+          tail -n 6 "$MKFILE"
+
+      # =====================================================================
       # OrangeFox build vars (OF_*/FOX_*) HARUS lewat vendorsetup.sh atau
       # export shell - TIDAK BOLEH di BoardConfig.mk (lihat catatan di step
       # "Patch Device Tree for Dynamic Partition" di atas). Ini
@@ -396,8 +445,11 @@ jobs:
       #   diarahkan ke /dev/block/mapper/* - device ini dynamic partition
       #   retrofit, jadi system/vendor aslinya logical partition, bukan
       #   partisi fisik biasa.
-      # - OF_ENABLE_ALL_PARTITION_TOOLS: setara TW_ENABLE_ALL_PARTITION_TOOLS,
-      #   relevan karena device dynamic partition.
+      # - OF_ENABLE_ALL_PARTITION_TOOLS: sempat gagal build ("requires
+      #   dynamic partitions") karena PRODUCT_USE_DYNAMIC_PARTITIONS belum
+      #   diset - sudah difix di step "Enable PRODUCT_USE_DYNAMIC_PARTITIONS
+      #   in device.mk" (setelah step "Patch Device Tree for Dynamic
+      #   Partition"), jadi flag ini diaktifkan lagi.
       # - OF_FORCE_PREBUILT_KERNEL: sesuai Building Tip H resmi - wajib kalau
       #   kernel-nya prebuilt (persis kasus kita, lihat step "Replace
       #   Prebuilt Kernel") buat menghindari error "NO KERNEL CONFIG".
@@ -447,6 +499,10 @@ jobs:
               # lihat step "Patch Device Tree for Dynamic Partition")
               export FOX_RECOVERY_SYSTEM_PARTITION="/dev/block/mapper/system"
               export FOX_RECOVERY_VENDOR_PARTITION="/dev/block/mapper/vendor"
+              # Dynamic partition retrofit devices - butuh
+              # PRODUCT_USE_DYNAMIC_PARTITIONS di device.mk (lihat step
+              # "Enable PRODUCT_USE_DYNAMIC_PARTITIONS in device.mk") biar
+              # orangefox.mk gak menolak flag ini
               export OF_ENABLE_ALL_PARTITION_TOOLS=1
 
               # Kernel prebuilt (lihat step "Replace Prebuilt Kernel") -

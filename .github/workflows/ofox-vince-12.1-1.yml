@@ -1,0 +1,758 @@
+name: ofox-vince-12.1
+
+on:
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # ==== OrangeFox sync config (setara config.sh punya OrangeFox-CI resmi) ====
+  FOX_SYNC_REPO: "https://gitlab.com/OrangeFox/sync.git"
+  FOX_BRANCH: "fox_12.1"
+  SYNC_PATH: "/home/runner/work/ofox" # absolute path, disamakan dgn convention SYNC_PATH resmi
+  DEVICE: "vince"
+  OEM: "xiaomi"
+  # Device tree TWRP-compatible yang sudah kebukti jalan (branch >=11 OrangeFox
+  # official build.sh memang lunch "twrp_${DEVICE}-eng", jadi device tree yang
+  # sama persis dgn build TWRP 12.1 kamu dipakai lagi di sini)
+  DT_LINK: "https://github.com/Project-Nightcord/twrp_device_xiaomi_vince.git"
+  DT_BRANCH: "android-12.1"
+  TARGET: "recoveryimage"
+  OF_MAINTAINER: "RahmatSobrian"
+  OF_BUILD_TYPE: "Unofficial-CI"
+  OF_USE_LATEST_MAGISK: "true"
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        uses: insightsengineering/disk-space-reclaimer@v1
+        with:
+          tools-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+          docker-images: true
+
+      - name: Free Disk Space
+        uses: endersonmenezes/free-disk-space@v3
+        with:
+          remove_android: true
+          remove_dotnet: true
+          remove_haskell: true
+          remove_tool_cache: true
+          remove_swap: true
+          remove_packages: "azure-cli google-cloud-cli microsoft-edge-stable google-chrome-stable firefox postgresql* temurin-* *llvm* mysql* dotnet-sdk-*"
+          remove_packages_one_command: true
+          remove_folders: "/usr/share/swift /usr/share/miniconda /usr/share/az* /usr/local/lib/node_modules /usr/local/share/chromium /usr/local/share/powershell /usr/local/julia /usr/local/aws-cli /usr/local/aws-sam-cli /usr/share/gradle"
+          rm_cmd: "rm"
+          rmz_version: "3.1.1"
+          testing: false
+
+      - name: Check Disk Space (after reclaim)
+        run: df -h
+
+      - name: Set Swap Space
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 2
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Notify Telegram - Build Started
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          BUILD_DATE=$(date +"%Y-%m-%d %H:%M:%S UTC")
+          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            -d parse_mode="Markdown" \
+            -d text="🦊 *OrangeFox Build Started*
+            📱 *Device:* Xiaomi Redmi 5 Plus (vince) - mi8953
+            🌿 *FOX_BRANCH:* ${{ env.FOX_BRANCH }}
+            🕒 *Time:* ${BUILD_DATE}
+            🔗 [GitHub Actions](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+
+      # =====================================================================
+      # Dependency tambahan dibanding workflow TWRP: jq + aria2 dibutuhin
+      # sync.sh resmi OrangeFox buat query GitHub API rilis Magisk terbaru
+      # (jq) dan download-nya (aria2c, fallback ke wget kalau gak ada).
+      # =====================================================================
+      - name: Install Packages
+        run: |
+          sudo apt-get update -y 2>&1 | tee -a /tmp/full_build.log
+          sudo apt-get install -y --no-install-recommends \
+            git curl wget zip unzip cpio bzip2 zstd lzop \
+            make python3 bc flex bison gperf gawk \
+            libxml2-utils xsltproc libssl-dev \
+            build-essential ccache jq aria2 2>&1 | tee -a /tmp/full_build.log
+
+      - name: Setup Repo Tool
+        run: |
+          git config --global user.name "RahmatSobrian"
+          git config --global user.email "build@relife.local"
+          git config --global color.ui false
+          mkdir -p ~/bin
+          curl -o ~/bin/repo https://storage.googleapis.com/git-repo-downloads/repo
+          chmod a+x ~/bin/repo
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Notify Telegram - Syncing Sources
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            -d parse_mode="Markdown" \
+            -d text="🔄 *Syncing OrangeFox Sources...*
+            📦 Sync script: OrangeFox/sync (orangefox_sync.sh)
+            🌿 Branch: ${{ env.FOX_BRANCH }}
+            ⚙️ Harap tunggu, ini biasanya paling lama..."
+
+      # =====================================================================
+      # Sync sumber OrangeFox pakai script SYNC RESMI-nya sendiri
+      # (gitlab.com/OrangeFox/sync -> orangefox_sync.sh), bukan repo init
+      # manual ke minimal-manifest-twrp seperti workflow TWRP kamu -
+      # ini WAJIB karena orangefox_sync.sh yang narik manifest + patch
+      # source bootable/recovery versi OrangeFox (GUI, fitur OF_* dst),
+      # bukan TWRP vanilla.
+      #
+      # SYNC_BRANCH diturunkan dari FOX_BRANCH (fox_12.1 -> "12.1"), persis
+      # logic sync.sh resmi OrangeFox-CI.
+      # =====================================================================
+      - name: Sync OrangeFox Sources (orangefox_sync.sh)
+        run: |
+          set -e
+          mkdir -p "${{ env.SYNC_PATH }}"
+          cd "$HOME"
+
+          git clone --depth=1 "${{ env.FOX_SYNC_REPO }}" ofox-sync-tool
+          cd ofox-sync-tool
+
+          SYNC_BRANCH=$(echo "${{ env.FOX_BRANCH }}" | cut -d_ -f2)
+          echo "SYNC_BRANCH=$SYNC_BRANCH" | tee -a "$GITHUB_ENV"
+
+          bash orangefox_sync.sh --branch "$SYNC_BRANCH" --path "${{ env.SYNC_PATH }}" 2>&1 | tee -a /tmp/full_build.log
+
+      - name: Check Disk Space (after sync)
+        run: df -h
+
+      - name: Clone OrangeFox Theme
+        run: |
+          cd "${{ env.SYNC_PATH }}"
+          if [ ! -d bootable/recovery/gui/theme ]; then
+            git clone https://gitlab.com/OrangeFox/misc/theme.git bootable/recovery/gui/theme 2>&1 | tee -a /tmp/full_build.log
+          else
+            echo "Theme sudah ada, skip clone"
+          fi
+
+      # =====================================================================
+      # Device tree: PAKAI ULANG twrp_device_xiaomi_vince (android-12.1)
+      # yang sudah kebukti jalan di workflow TWRP kamu - bukan cari device
+      # tree "fox_12.1" terpisah (device tree fox_9.0 yang kamu upload itu
+      # basis Android 9 lama, gak kompatibel sama base 12.1 ini). Ini sesuai
+      # pola build.sh resmi OrangeFox sendiri: untuk branch >= 11, target
+      # lunch-nya "twrp_${DEVICE}-eng" - artinya device tree TWRP biasa
+      # memang yang dipakai, OrangeFox cuma nambah layer GUI/fitur di atas
+      # source bootable/recovery hasil sync.
+      # =====================================================================
+      - name: Clone Device Tree (vince)
+        run: |
+          cd "${{ env.SYNC_PATH }}"
+          rm -rf "device/${{ env.OEM }}/${{ env.DEVICE }}"
+          git clone --depth=1 \
+            "${{ env.DT_LINK }}" \
+            -b "${{ env.DT_BRANCH }}" \
+            "device/${{ env.OEM }}/${{ env.DEVICE }}" \
+            2>&1 | tee -a /tmp/full_build.log
+
+      # =====================================================================
+      # GANTI KERNEL PREBUILT: sama seperti workflow TWRP - kernel bawaan
+      # device tree (4.9.291) gak lengkap dukungan dynamic-partition
+      # (device-mapper) & MADV_WIPEONFORK.
+      #
+      # CATATAN: sumber kernel ini dari repo "dummy" pribadi - belum
+      # terverifikasi 100% match devicetree fisik vince (lihat temuan
+      # touchscreen I2C gagal di sesi debug TWRP sebelumnya). Kalau nanti
+      # OrangeFox hasil build ini touchscreen-nya mati juga, ini titik
+      # pertama yang perlu dicek ulang.
+      # =====================================================================
+      - name: Replace Prebuilt Kernel (4.9, fix MADV_WIPEONFORK / dynamic partition support)
+        run: |
+          cd "${{ env.SYNC_PATH }}/device/${{ env.OEM }}/${{ env.DEVICE }}"
+          set -e
+          echo "== Download kernel custom 4.9 =="
+          curl -L -o prebuilt/Image.gz-dtb \
+            "https://github.com/rahmatsobrian/dummy/raw/refs/heads/main/Image.gz-dtb"
+          ls -la prebuilt/Image.gz-dtb
+          file prebuilt/Image.gz-dtb || true
+
+          echo "== Sesuaikan TARGET_KERNEL_VERSION di BoardConfig.mk =="
+          grep -n "^TARGET_KERNEL_VERSION" BoardConfig.mk
+          sed -i 's/^TARGET_KERNEL_VERSION := .*/TARGET_KERNEL_VERSION := 4.9/' BoardConfig.mk
+          grep -n "^TARGET_KERNEL_VERSION" BoardConfig.mk
+
+          echo "== BOARD_KERNEL_* saat ini (referensi debug kalau boot gagal) =="
+          grep "^BOARD_KERNEL_" BoardConfig.mk
+
+      # =====================================================================
+      # PENTING: nilai BOARD_SUPER_PARTITION_SIZE dkk di bawah disalin persis
+      # dari device tree ROM (Project-Nightcord/android_device_xiaomi_vince,
+      # branch lineage-22.2) - identik dengan workflow TWRP kamu, karena
+      # OrangeFox jalan di atas PartitionManager yang sama persis dengan
+      # TWRP (OFRP adalah fork TWRP), jadi semua masalah dynamic partition
+      # yang kemarin ketemu di TWRP bakal muncul lagi di sini kalau gak
+      # dipatch juga.
+      # =====================================================================
+      - name: Patch Device Tree for Dynamic Partition (Super) Support
+        run: |
+          cd "${{ env.SYNC_PATH }}/device/${{ env.OEM }}/${{ env.DEVICE }}"
+          set -e
+
+          echo "== Patch BoardConfig.mk =="
+          sed -i '/BOARD_SYSTEMIMAGE_PARTITION_SIZE/d;/BOARD_VENDORIMAGE_PARTITION_SIZE/d;/BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE/d' BoardConfig.mk
+
+          cat >> BoardConfig.mk << 'EOF'
+
+          # ==== Dynamic Partitions (retrofit super) - vince/mi8953 ====
+          BOARD_SUPER_PARTITION_BLOCK_DEVICES := cust system
+          BOARD_SUPER_PARTITION_METADATA_DEVICE := system
+          BOARD_SUPER_PARTITION_CUST_DEVICE_SIZE := 536870912
+          BOARD_SUPER_PARTITION_SYSTEM_DEVICE_SIZE := 3221225472
+          BOARD_SUPER_PARTITION_SIZE := $(shell expr $(BOARD_SUPER_PARTITION_CUST_DEVICE_SIZE) + $(BOARD_SUPER_PARTITION_SYSTEM_DEVICE_SIZE) )
+
+          BOARD_SUPER_PARTITION_GROUPS := mi8953_dynpart
+          BOARD_MI8953_DYNPART_SIZE := $(shell expr $(BOARD_SUPER_PARTITION_SIZE) - 4194304 )
+          BOARD_MI8953_DYNPART_PARTITION_LIST := product system system_ext odm vendor
+
+          TARGET_COPY_OUT_PRODUCT := product
+          TARGET_COPY_OUT_SYSTEM_EXT := system_ext
+          TARGET_COPY_OUT_VENDOR := vendor
+          TARGET_COPY_OUT_ODM := odm
+
+          BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
+          BOARD_PRODUCTIMAGE_FILE_SYSTEM_TYPE := ext4
+          BOARD_SYSTEM_EXTIMAGE_FILE_SYSTEM_TYPE := ext4
+          BOARD_ODMIMAGE_FILE_SYSTEM_TYPE := ext4
+
+          # TWRP/OrangeFox: aktifkan dukungan mount partisi logical
+          TW_INCLUDE_LOGICAL := true
+
+          # Sama seperti workflow TWRP - jangan unmount /system, device ini
+          # dynamic partition (logical, bukan filesystem statis)
+          TW_NEVER_UNMOUNT_SYSTEM := true
+
+          TW_INCLUDE_RESETPROP := true
+          TW_INCLUDE_LIBRESETPROP := true
+
+          TW_USE_LEGACY_BATTERY_SERVICES := true
+          TW_CUSTOM_BATTERY_PATH := "/sys/class/power_supply/battery"
+
+          TW_CUSTOM_CPU_TEMP_PATH := /sys/class/thermal/thermal_zone11/temp
+
+          TW_BRIGHTNESS_PATH := /sys/class/leds/lcd-backlight/brightness
+          TW_MAX_BRIGHTNESS := 255
+          TW_DEFAULT_BRIGHTNESS := 150
+
+          TW_FRAMERATE := 60
+
+          TW_HAS_EDL_MODE := true
+          EOF
+          # CATATAN: var OrangeFox (prefix FOX_/OF_) SENGAJA tidak ditaruh di
+          # sini. Menurut wiki resmi: "Do NOT put OrangeFox-specific build
+          # variables that start with FOX_ in BoardConfig.mk - they will not
+          # be processed properly, or at all, if they are in any .mk file -
+          # they must be in a script, or exported manually at the command
+          # line." Semua var OF_MAINTAINER dkk ditaruh di step
+          # "Create vendorsetup.sh (OrangeFox build vars)" di bawah.
+
+          # ===================================================================
+          # Fix fstab/merge-fstab: PERSIS pola yang sama kayak TWRP 12.1 -
+          # PartitionManager OrangeFox = PartitionManager TWRP, jadi
+          # error "Unable to find partition for path '/system_root'" bakal
+          # muncul juga di sini kalau gak dipatch.
+          # ===================================================================
+          echo "== Hapus entry /system & /system_image & /vendor statis dari twrp.fstab =="
+          FSTAB=recovery/root/system/etc/twrp.fstab
+          sed -i '/^\/system /d;/^\/system_image /d;/^\/vendor /d;/^\/vendor_image /d' "$FSTAB"
+          cat "$FSTAB"
+
+          echo "== Buat recovery.fstab base (tanpa entry system/vendor statis) =="
+          RFSTAB=recovery/root/system/etc/recovery.fstab
+          sed -i '/\/by-name\/system\s\+\/system/d;/\/by-name\/cust\s\+\/vendor/d' "$RFSTAB"
+          cat "$RFSTAB"
+
+          echo "== Buat twrp.flags.dynpart =="
+          cat > recovery/root/system/etc/twrp.flags.dynpart << 'EOF'
+          # mount point   fstype  device                      device2                     flags
+          /data           ext4    /dev/block/bootdevice/by-name/userdata                  flags=encryptable=footer;fsflags="discard"
+          /metadata       ext4    /dev/block/bootdevice/by-name/logdump                   flags=display="Metadata";fsflags="discard"
+          EOF
+
+          echo "== Buat twrp.flags.nondynpart =="
+          cat > recovery/root/system/etc/twrp.flags.nondynpart << 'EOF'
+          # mount point   fstype  device                      device2                     flags
+          /system_root    ext4    /dev/block/bootdevice/by-name/system                    flags=display="System";fsflags="discard";wipeingui
+          /system_image   emmc    /dev/block/bootdevice/by-name/system                    flags=display="System";backup=1;flashimg=1
+          /vendor         ext4    /dev/block/bootdevice/by-name/cust                      flags=display="Vendor";fsflags="discard";wipeingui
+          /vendor_image   emmc    /dev/block/bootdevice/by-name/cust                      flags=display="Vendor";backup=1;flashimg=1
+          /data           ext4    /dev/block/bootdevice/by-name/userdata                  flags=encryptable=footer;fsflags="discard"
+          /metadata       ext4    /dev/block/bootdevice/by-name/logdump                   flags=display="Metadata";fsflags="discard"
+          EOF
+
+          echo "== Buat merge-fstab.sh =="
+          mkdir -p recovery/root/system/bin
+          cat > recovery/root/system/bin/merge-fstab.sh << 'EOF'
+          #!/system/bin/sh
+          echo >> /system/etc/recovery.fstab
+          echo >> /system/etc/twrp.flags
+
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+              [ -e /dev/block/by-name/system ] && break
+              sleep 0.5
+          done
+          if [ -e /dev/block/by-name/system ]; then
+              ln -sf /dev/block/by-name/system /dev/block/by-name/super
+          else
+              echo "merge-fstab.sh: WARNING /dev/block/by-name/system belum ada setelah nunggu 5 detik" 1>&2
+          fi
+
+          if dd if=/dev/block/by-name/system bs=256k count=1 2>/dev/null | strings | grep -q mi8953_dynpart; then
+              cat /system/etc/twrp.flags.dynpart >> /system/etc/twrp.flags
+              echo >> /system/etc/recovery.fstab
+              for p in system system_ext product vendor odm; do
+                  if [ "$p" = "system" ]; then mnt="/system_root"; else mnt="/${p}"; fi
+                  echo "${p} ${mnt} ext4 rw,barrier=1,discard wait,logical" >> /system/etc/recovery.fstab
+              done
+
+              echo >> /system/etc/twrp.flags
+              for p in system system_ext product vendor odm; do
+                  if [ "$p" = "system" ]; then mnt="/system_root"; else mnt="/${p}"; fi
+                  if [ "$p" = "vendor" ] || [ "$p" = "odm" ]; then
+                      echo "${mnt} ext4 /dev/block/mapper/${p} flags=display=\"${p}\";backup=1;wipeingui;fsflags=\"ro\"" >> /system/etc/twrp.flags
+                  else
+                      echo "${mnt} ext4 /dev/block/mapper/${p} flags=display=\"${p}\";backup=1;wipeingui" >> /system/etc/twrp.flags
+                  fi
+              done
+
+              echo >> /system/etc/twrp.flags
+              for p in cust; do
+                  echo "/super_${p} emmc /dev/block/by-name/${p} flags=display=\"Super_${p}\";backup=1" >> /system/etc/twrp.flags
+              done
+          else
+              cat /system/etc/twrp.flags.nondynpart >> /system/etc/twrp.flags
+              echo >> /system/etc/twrp.flags
+              echo "/super emmc /dev/block/by-name/system flags=display=\"Super\";backup=1" >> /system/etc/twrp.flags
+              for p in cust; do
+                  echo "/super_${p} emmc /dev/block/by-name/${p} flags=display=\"Super_${p}\";backup=1" >> /system/etc/twrp.flags
+              done
+          fi
+          EOF
+          chmod 755 recovery/root/system/bin/merge-fstab.sh
+
+          echo "== Daftarkan merge-fstab.sh supaya jalan saat 'on init' recovery =="
+          INIT_RC=$(find recovery/root -maxdepth 1 -iname "init.recovery.*.rc" | head -1)
+          if [ -z "$INIT_RC" ]; then
+            INIT_RC="recovery/root/init.recovery.msm8953.rc"
+            touch "$INIT_RC"
+          fi
+          if ! grep -q "merge-fstab.sh" "$INIT_RC"; then
+            cat >> "$INIT_RC" << 'EOF'
+
+          on init
+              exec u:r:recovery:s0 root root -- /system/bin/merge-fstab.sh
+          EOF
+          fi
+          grep -B 1 -A 2 "merge-fstab" "$INIT_RC"
+
+          echo "== Ringkasan =="
+          tail -n 30 BoardConfig.mk
+
+      # =====================================================================
+      # OrangeFox build vars (OF_*/FOX_*) HARUS lewat vendorsetup.sh atau
+      # export shell - TIDAK BOLEH di BoardConfig.mk (lihat catatan di step
+      # "Patch Device Tree for Dynamic Partition" di atas). Ini
+      # vendorsetup.sh yang di-source otomatis oleh build/envsetup.sh.
+      #
+      # Pola guard "FOX_BUILD_DEVICE" di bawah disalin dari device tree
+      # OrangeFox official utk keluarga MSM8937 (device_xiaomi_spes,
+      # fox-12.1) - device serumpun dgn vince (MSM8953). Guard ini penting
+      # karena vendorsetup.sh di-source untuk SEMUA device tree yang ada di
+      # source, jadi var-nya harus dibatasi cuma aktif pas lunch/build vince.
+      #
+      # Var yang dipilih relevan buat vince:
+      # - OF_PATCH_AVB20: A-only Xiaomi MIUI device (vince persis kriteria
+      #   ini) - supaya OrangeFox gak ketimpa recovery stok MIUI pas boot ROM
+      # - FOX_RECOVERY_SYSTEM_PARTITION / FOX_RECOVERY_VENDOR_PARTITION:
+      #   diarahkan ke /dev/block/mapper/* - device ini dynamic partition
+      #   retrofit, jadi system/vendor aslinya logical partition, bukan
+      #   partisi fisik biasa.
+      # - OF_ENABLE_ALL_PARTITION_TOOLS: setara TW_ENABLE_ALL_PARTITION_TOOLS,
+      #   relevan karena device dynamic partition.
+      # - OF_FORCE_PREBUILT_KERNEL: sesuai Building Tip H resmi - wajib kalau
+      #   kernel-nya prebuilt (persis kasus kita, lihat step "Replace
+      #   Prebuilt Kernel") buat menghindari error "NO KERNEL CONFIG".
+      #
+      # BELUM diisi (butuh verifikasi manual, jangan asal tebak):
+      # - OF_DEFAULT_KEYMASTER_VERSION: wiki resmi "strongly recommended
+      #   to always do this" buat cegah stuck di logo pas decrypt data. Cek
+      #   versi keymaster ROM yang dipakai (biasanya 4.0 atau 4.1 di
+      #   device MSM8953 seumuran ini) sebelum isi ini - nilai yang salah
+      #   bisa bikin decryption gagal, jadi sengaja dikosongkan dulu.
+      # =====================================================================
+      - name: Create vendorsetup.sh (OrangeFox build vars)
+        run: |
+          cd "${{ env.SYNC_PATH }}/device/${{ env.OEM }}/${{ env.DEVICE }}"
+          cat > vendorsetup.sh << 'EOF'
+          #
+          # vendorsetup.sh - OrangeFox build vars untuk vince (mi8953/MSM8953)
+          # Pola guard disalin dari device tree resmi OrangeFox keluarga
+          # MSM8937 (device_xiaomi_spes, branch fox-12.1)
+          #
+          FDEVICE="vince"
+
+          fox_get_target_device() {
+              local chkdev=$(echo "$BASH_SOURCE" | grep -w $FDEVICE)
+              if [ -n "$chkdev" ]; then
+                  FOX_BUILD_DEVICE="$FDEVICE"
+              else
+                  chkdev=$(set | grep BASH_ARGV | grep -w $FDEVICE)
+                  [ -n "$chkdev" ] && FOX_BUILD_DEVICE="$FDEVICE"
+              fi
+          }
+
+          if [ -z "$1" ] && [ -z "$FOX_BUILD_DEVICE" ]; then
+              fox_get_target_device
+          fi
+
+          if [ "$1" = "$FDEVICE" ] || [ "$FOX_BUILD_DEVICE" = "$FDEVICE" ]; then
+
+              export OF_MAINTAINER="RahmatSobrian"
+              export FOX_BUILD_TYPE="Unofficial-CI"
+
+              # A-only Xiaomi MIUI device - cegah MIUI stock recovery
+              # nimpa OrangeFox pas boot ke ROM
+              export OF_PATCH_AVB20=1
+
+              # Dynamic partition retrofit (super menumpang di cust+system,
+              # lihat step "Patch Device Tree for Dynamic Partition")
+              export FOX_RECOVERY_SYSTEM_PARTITION="/dev/block/mapper/system"
+              export FOX_RECOVERY_VENDOR_PARTITION="/dev/block/mapper/vendor"
+              export OF_ENABLE_ALL_PARTITION_TOOLS=1
+
+              # Kernel prebuilt (lihat step "Replace Prebuilt Kernel") -
+              # cegah error "NO KERNEL CONFIG" (Building Tip H resmi)
+              export OF_FORCE_PREBUILT_KERNEL=1
+
+              # TODO: verifikasi versi keymaster ROM target, lalu isi:
+              # export OF_DEFAULT_KEYMASTER_VERSION="4.1"
+
+              if [ -n "$FOX_BUILD_LOG_FILE" ] && [ -f "$FOX_BUILD_LOG_FILE" ]; then
+                  export | grep "FOX" >> "$FOX_BUILD_LOG_FILE"
+                  export | grep "OF_" >> "$FOX_BUILD_LOG_FILE"
+              fi
+          else
+              if [ -z "$FOX_BUILD_DEVICE" ] && [ -z "$BASH_SOURCE" ]; then
+                  echo "I: This script requires bash. Not processing the $FDEVICE $(basename "$0")"
+              fi
+          fi
+          EOF
+          echo "== vendorsetup.sh dibuat =="
+          cat vendorsetup.sh
+
+      - name: Increase Kernel/Recovery Log Verbosity (for debugging)
+        run: |
+          cd "${{ env.SYNC_PATH }}/device/${{ env.OEM }}/${{ env.DEVICE }}"
+          sed -i 's/^BOARD_KERNEL_CMDLINE := /BOARD_KERNEL_CMDLINE := printk.devkmsg=on loglevel=8 /' BoardConfig.mk
+          grep "^BOARD_KERNEL_CMDLINE" BoardConfig.mk
+          grep -q "^TWRP_INCLUDE_LOGCAT" BoardConfig.mk || echo "TWRP_INCLUDE_LOGCAT := true" >> BoardConfig.mk
+          grep -q "^TARGET_USES_LOGD" BoardConfig.mk || echo "TARGET_USES_LOGD := true" >> BoardConfig.mk
+
+      # =====================================================================
+      # Magisk - persis logic sync.sh resmi OrangeFox-CI: query API GitHub
+      # buat rilis terbaru, download .apk-nya, rename jadi .zip (Magisk .apk
+      # itu literally file zip juga), lalu dipakai lewat env
+      # FOX_USE_SPECIFIC_MAGISK_ZIP di step build.
+      # =====================================================================
+      - name: Download Latest Magisk
+        if: env.OF_USE_LATEST_MAGISK == 'true'
+        run: |
+          set -e
+          mkdir -p "$HOME/Magisk"
+          cd "$HOME/Magisk"
+          echo "== Cari URL rilis Magisk terbaru =="
+          LATEST_MAGISK_URL="$(curl -sL https://api.github.com/repos/topjohnwu/Magisk/releases/latest | jq -r '.assets[] | select(.name | test("Magisk-v.*\\.apk$")) | .browser_download_url' | head -1)"
+          echo "URL: $LATEST_MAGISK_URL"
+          aria2c "$LATEST_MAGISK_URL" || wget "$LATEST_MAGISK_URL"
+          for f in Magisk*.apk; do
+            mv "$f" "${f%.apk}.zip"
+          done
+          ls -la "$HOME/Magisk"
+          echo "MAGISK_ZIP=$(ls $HOME/Magisk/Magisk*.zip | head -1)" >> "$GITHUB_ENV"
+
+      - name: Patch TW_DEVICE_VERSION (ganti nama maintainer di splash)
+        run: |
+          cd "${{ env.SYNC_PATH }}/device/${{ env.OEM }}/${{ env.DEVICE }}"
+          set -e
+          grep -n "^TW_DEVICE_VERSION" BoardConfig.mk || true
+          if grep -q "^TW_DEVICE_VERSION" BoardConfig.mk; then
+            sed -i 's/^TW_DEVICE_VERSION := .*/TW_DEVICE_VERSION := Redmi 5 Plus | RahmatSobrian/' BoardConfig.mk
+          else
+            echo "TW_DEVICE_VERSION := Redmi 5 Plus | RahmatSobrian" >> BoardConfig.mk
+          fi
+          grep -n "^TW_DEVICE_VERSION" BoardConfig.mk
+
+      - name: Check Disk Space (before compile)
+        run: df -h
+
+      - name: Show Biggest Folders (debug)
+        working-directory: ${{ env.SYNC_PATH }}
+        run: |
+          echo "== Top 15 folder terbesar =="
+          du -h --max-depth=1 . 2>/dev/null | sort -rh | head -15
+          echo ""
+          echo "== Total ukuran =="
+          du -sh . 2>/dev/null
+
+      - name: Notify Telegram - Compiling
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            -d parse_mode="Markdown" \
+            -d text="⚙️ *Compiling OrangeFox...*
+            📱 *Target:* twrp_vince-eng
+            🧵 *Threads:* $(nproc --all) cores
+            🔨 Build sedang berjalan, harap tunggu..."
+
+      - name: Start Disk Monitor (background)
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          (
+            ALERTED=false
+            while true; do
+              echo "=== $(date +%H:%M:%S) ===" >> /tmp/disk_monitor.log
+              df -h >> /tmp/disk_monitor.log
+              echo "" >> /tmp/disk_monitor.log
+
+              USAGE=$(df / | tail -1 | awk '{print $5}' | tr -d '%')
+              AVAIL=$(df -h / | tail -1 | awk '{print $4}')
+
+              if [ "$USAGE" -ge 85 ] && [ "$ALERTED" = false ]; then
+                ALERTED=true
+                curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+                  -d chat_id="${TG_CHAT_ID}" \
+                  -d parse_mode="Markdown" \
+                  -d text="⚠️ *Disk Space Kritis!*
+              💾 Terpakai: ${USAGE}% (sisa: ${AVAIL})
+              🕒 $(date +%H:%M:%S)
+              📱 Build OrangeFox vince masih jalan, kemungkinan bakal gagal karena disk penuh."
+              fi
+
+              sleep 120
+            done
+          ) &
+          echo "DISK_MONITOR_PID=$!" >> $GITHUB_ENV
+
+      # =====================================================================
+      # Build - persis logic build.sh resmi OrangeFox: source envsetup, set
+      # ALLOW_MISSING_DEPENDENCIES + FOX_USE_TWRP_RECOVERY_IMAGE_BUILDER,
+      # lunch twrp_${DEVICE}-eng (branch 12.1 >= 11, sesuai kondisi
+      # BRANCH_INT resmi), mka $TARGET.
+      # =====================================================================
+      - name: Start Build (with log)
+        working-directory: ${{ env.SYNC_PATH }}
+        env:
+          KBUILD_BUILD_USER: "RahmatSobrian"
+          KBUILD_BUILD_HOST: "YoruProject"
+        run: |
+          mkdir -p logs
+          export ALLOW_MISSING_DEPENDENCIES=true
+          export FOX_USE_TWRP_RECOVERY_IMAGE_BUILDER=1
+          export LC_ALL=C
+          # Building Tip I resmi: "ensure your Linux shell for building is
+          # bash, and that you have run export FOX_BUILD_DEVICE=<device>
+          # before building" - wajib biar guard di vendorsetup.sh kepicu
+          # dengan pasti, gak cuma mengandalkan deteksi BASH_ARGV dari lunch.
+          export FOX_BUILD_DEVICE="${{ env.DEVICE }}"
+          if [ -n "${MAGISK_ZIP:-}" ]; then
+            export FOX_USE_SPECIFIC_MAGISK_ZIP="$MAGISK_ZIP"
+          fi
+
+          set +e
+          . build/envsetup.sh
+          set -e
+
+          if ! type lunch &>/dev/null; then
+            echo "❌ lunch not found" | tee -a /tmp/full_build.log
+            exit 1
+          fi
+
+          lunch twrp_vince-eng
+          if [ $? -ne 0 ]; then
+            echo "❌ lunch failed" | tee -a /tmp/full_build.log
+            exit 1
+          fi
+
+          echo "TARGET_PRODUCT=$TARGET_PRODUCT" | tee -a /tmp/full_build.log
+          echo "TARGET_DEVICE=$TARGET_DEVICE" | tee -a /tmp/full_build.log
+
+          if [ "$TARGET_PRODUCT" != "twrp_vince" ]; then
+            echo "❌ TARGET_PRODUCT salah: $TARGET_PRODUCT" | tee -a /tmp/full_build.log
+            exit 1
+          fi
+
+          mka -j$(nproc --all) "${{ env.TARGET }}" 2>&1 | tee logs/build.txt | tee -a /tmp/full_build.log
+
+      - name: Stop Disk Monitor & Save Log
+        if: always()
+        run: |
+          kill "$DISK_MONITOR_PID" 2>/dev/null || true
+          echo "=== FINAL $(date +%H:%M:%S) ===" >> /tmp/disk_monitor.log
+          df -h >> /tmp/disk_monitor.log
+          mkdir -p "${{ env.SYNC_PATH }}/debug-info"
+          cp /tmp/disk_monitor.log "${{ env.SYNC_PATH }}/debug-info/disk_monitor.log" 2>/dev/null || true
+
+      - name: Check Disk Space (after compile)
+        if: always()
+        run: df -h
+
+      - name: Upload Build Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: ${{ env.SYNC_PATH }}/logs/build.txt
+
+      - name: Collect Debug Info (final fstab & config actually embedded)
+        if: always()
+        working-directory: ${{ env.SYNC_PATH }}
+        run: |
+          mkdir -p debug-info
+          OUT=out/target/product/${{ env.DEVICE }}/recovery/root/system/etc
+          cp -v "$OUT/twrp.fstab" debug-info/twrp.fstab.final 2>/dev/null || echo "twrp.fstab.final: tidak ditemukan" > debug-info/twrp.fstab.final
+          cp -v "$OUT/recovery.fstab" debug-info/recovery.fstab.final 2>/dev/null || echo "recovery.fstab.final: tidak ditemukan" > debug-info/recovery.fstab.final
+          cp -v "device/${{ env.OEM }}/${{ env.DEVICE }}/BoardConfig.mk" debug-info/BoardConfig.mk.used 2>/dev/null || true
+          echo "Build finished at $(date)" > debug-info/build-meta.txt
+          echo "TARGET_PRODUCT=twrp_${{ env.DEVICE }}" >> debug-info/build-meta.txt
+          echo "FOX_BRANCH=${{ env.FOX_BRANCH }}" >> debug-info/build-meta.txt
+
+      - name: Upload Debug Info
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ofox-vince-debug-info
+          path: ${{ env.SYNC_PATH }}/debug-info
+        continue-on-error: true
+
+      - name: Upload recovery.img
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ofox-vince-recovery
+          path: ${{ env.SYNC_PATH }}/out/target/product/${{ env.DEVICE }}/recovery.img
+
+      - name: Upload OrangeFox zip
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ofox-vince-zip
+          path: ${{ env.SYNC_PATH }}/out/target/product/${{ env.DEVICE }}/OrangeFox*.zip
+        continue-on-error: true
+
+      - name: Notify Telegram - Build Success
+        if: success()
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          BUILD_DATE=$(date +"%Y-%m-%d %H:%M:%S UTC")
+          IMG_SIZE=$(du -sh "${{ env.SYNC_PATH }}/out/target/product/${{ env.DEVICE }}/recovery.img" 2>/dev/null | cut -f1 || echo "N/A")
+          DISK_FINAL=$(df -h / | tail -1 | awk '{print "Terpakai "$5" (sisa "$4")"}')
+          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            -d parse_mode="Markdown" \
+            -d text="✅ *OrangeFox Build Sukses!*
+            📱 *Device:* Xiaomi Redmi 5 Plus (vince) - mi8953
+            🌿 *FOX_BRANCH:* ${{ env.FOX_BRANCH }}
+            📦 *Image Size:* ${IMG_SIZE}
+            💾 *Disk saat selesai:* ${DISK_FINAL}
+            🕒 *Selesai:* ${BUILD_DATE}
+            📥 Artifacts: \`recovery.img\` • \`OrangeFox-*.zip\` • \`build.txt\` • \`disk_monitor.log\`
+            🔗 [Download](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            🦊 *OrangeFox vince berhasil di-build!*"
+
+      - name: Send Disk Monitor Log to Telegram on Failure
+        if: failure()
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          if [ -f /tmp/disk_monitor.log ]; then
+            curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
+              -F chat_id="${TG_CHAT_ID}" \
+              -F document=@/tmp/disk_monitor.log \
+              -F caption="💾 Disk usage log tiap 2 menit selama build (OrangeFox vince, FAILED)"
+          fi
+
+      - name: Upload Full Log to Telegram on Failure
+        if: failure()
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          mkdir -p "${{ env.SYNC_PATH }}/logs"
+          cat /tmp/full_build.log >> "${{ env.SYNC_PATH }}/logs/build.txt" 2>/dev/null || true
+
+          LOG_FILE="${{ env.SYNC_PATH }}/logs/build.txt"
+          if [ ! -f "$LOG_FILE" ]; then
+            LOG_FILE="/tmp/full_build.log"
+          fi
+
+          if [ -f "$LOG_FILE" ]; then
+            FILE_SIZE=$(du -m "$LOG_FILE" | cut -f1)
+            if [ "$FILE_SIZE" -gt 45 ]; then
+              gzip -k "$LOG_FILE"
+              curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
+                -F chat_id="${TG_CHAT_ID}" \
+                -F document=@"${LOG_FILE}.gz" \
+                -F caption="📄 Full build log (compressed) - OrangeFox vince (FAILED)"
+            else
+              curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
+                -F chat_id="${TG_CHAT_ID}" \
+                -F document=@"${LOG_FILE}" \
+                -F caption="📄 Full build log - OrangeFox vince (FAILED)"
+            fi
+          fi
+
+      - name: Notify Telegram - Build Failed
+        if: failure()
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          BUILD_DATE=$(date +"%Y-%m-%d %H:%M:%S UTC")
+          DISK_FINAL=$(df -h / | tail -1 | awk '{print "Terpakai "$5" (sisa "$4")"}' 2>/dev/null || echo "N/A")
+          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            -d parse_mode="Markdown" \
+            -d text="❌ *OrangeFox Build GAGAL!*
+            📱 *Device:* Xiaomi Redmi 5 Plus (vince) - mi8953
+            🌿 *FOX_BRANCH:* ${{ env.FOX_BRANCH }}
+            💾 *Disk saat gagal:* ${DISK_FINAL}
+            🕒 *Waktu:* ${BUILD_DATE}
+            📄 Full log & disk_monitor.log sudah dikirim/tersedia di artifacts.
+            🔗 [Lihat Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"

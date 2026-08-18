@@ -263,7 +263,12 @@ jobs:
           TW_HAS_EDL_MODE := true
 
           # ==== PBRP build flags resmi (pitchblackrecovery.com/docs/build-flags) ====
-          MAINTAINER := "${{ env.PB_MAINTAINER }}"
+          # PENTING: TANPA tanda kutip di sini. Source resmi PBRP
+          # (bootable/recovery/twrp.cpp) sudah otomatis wrap value ini jadi
+          # -DMTAINER="...". Kalau kita ikut nulis kutip manual, hasilnya
+          # dobel kutip (""RahmatSobrian"") dan bikin compile error
+          # "invalid suffix on literal" (kejadian di build sebelumnya).
+          MAINTAINER := ${{ env.PB_MAINTAINER }}
 
           # dm-verity aktif secara default di PBRP; flag ini nge-untick opsi
           # "Disable dm-verity" di menu sebelumnya, jadi dm-verity langsung

@@ -1,0 +1,722 @@
+name: pbrp-vince-12.1
+
+on:
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # ==== PBRP manifest config ====
+  # Sesuai README resmi manifest_pb: "repo init -u .../manifest_pb -b android-12.1"
+  PB_MANIFEST: "https://github.com/PitchBlackRecoveryProject/manifest_pb"
+  PB_BRANCH: "android-12.1"
+  SYNC_PATH: "/home/runner/work/pbrp" # absolute path, pola sama kayak workflow OrangeFox kamu
+  DEVICE: "vince"
+  OEM: "xiaomi"
+  # PENTING: device tree resmi PitchBlackRecoveryProject/android_device_xiaomi_vince-pbrp
+  # basisnya android-9.0 (lama), TIDAK kompatibel sama manifest_pb android-12.1.
+  # Dipakai ulang device tree TWRP-compatible yang sudah kebukti jalan di workflow
+  # TWRP & OrangeFox kamu (Project-Nightcord, android-12.1) - patch dynamic partition
+  # & kernel-nya juga dipakai ulang persis, karena PBRP (android_bootable_recovery)
+  # tetap fork dari TWRP core, PartitionManager-nya sama persis.
+  DT_LINK: "https://github.com/Project-Nightcord/twrp_device_xiaomi_vince.git"
+  DT_BRANCH: "android-12.1"
+  TARGET: "pbrp" # target mka resmi PBRP (README: "mka pbrp"), BUKAN "recoveryimage"
+  PB_MAINTAINER: "RahmatSobrian"
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        uses: insightsengineering/disk-space-reclaimer@v1
+        with:
+          tools-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+          docker-images: true
+
+      - name: Free Disk Space
+        uses: endersonmenezes/free-disk-space@v3
+        with:
+          remove_android: true
+          remove_dotnet: true
+          remove_haskell: true
+          remove_tool_cache: true
+          remove_swap: true
+          remove_packages: "azure-cli google-cloud-cli microsoft-edge-stable google-chrome-stable firefox postgresql* temurin-* *llvm* mysql* dotnet-sdk-*"
+          remove_packages_one_command: true
+          remove_folders: "/usr/share/swift /usr/share/miniconda /usr/share/az* /usr/local/lib/node_modules /usr/local/share/chromium /usr/local/share/powershell /usr/local/julia /usr/local/aws-cli /usr/local/aws-sam-cli /usr/share/gradle"
+          rm_cmd: "rm"
+          rmz_version: "3.1.1"
+          testing: false
+
+      - name: Check Disk Space (after reclaim)
+        run: df -h
+
+      - name: Set Swap Space
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 2
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Notify Telegram - Build Started
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          BUILD_DATE=$(date +"%Y-%m-%d %H:%M:%S UTC")
+          curl -s -w "\n[TG_HTTP:%{http_code}]" -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            -d parse_mode="Markdown" \
+            -d text="⬛ *PBRP Build Started*
+            📱 *Device:* Xiaomi Redmi 5 Plus (vince) - mi8953
+            🌿 *Branch:* `${{ env.PB_BRANCH }}`
+            🕒 *Time:* ${BUILD_DATE}
+            🔗 [GitHub Actions](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+
+      - name: Install Packages
+        run: |
+          sudo apt-get update -y 2>&1 | tee -a /tmp/full_build.log
+          sudo apt-get install -y --no-install-recommends \
+            git curl wget zip unzip cpio bzip2 zstd lzop \
+            make python3 bc flex bison gperf gawk \
+            libxml2-utils xsltproc libssl-dev \
+            build-essential ccache 2>&1 | tee -a /tmp/full_build.log
+
+      - name: Setup Repo Tool
+        run: |
+          git config --global user.name "RahmatSobrian"
+          git config --global user.email "build@relife.local"
+          git config --global color.ui false
+          mkdir -p ~/bin
+          curl -o ~/bin/repo https://storage.googleapis.com/git-repo-downloads/repo
+          chmod a+x ~/bin/repo
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Notify Telegram - Syncing Sources
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          curl -s -w "\n[TG_HTTP:%{http_code}]" -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            -d parse_mode="Markdown" \
+            -d text="🔄 *Syncing PBRP Sources...*
+            📦 Manifest: manifest_pb (`${{ env.PB_BRANCH }}`)
+            ⚙️ Harap tunggu, ini biasanya paling lama..."
+
+      # =====================================================================
+      # Sync PERSIS sesuai "How To Build" resmi di README manifest_pb:
+      #   repo init -u https://github.com/PitchBlackRecoveryProject/manifest_pb -b android-12.1
+      #   repo sync
+      # Manifest ini otomatis nge-remove project bootable/recovery, build/make,
+      # build/soong dkk versi AOSP polos, digantikan fork PBRP sendiri
+      # (lihat pbrp-default.xml: <remove-project name="platform/bootable/recovery"/>
+      # lalu <project ... name="android_bootable_recovery" remote="PitchBlackRecoveryProject">)
+      # - jadi source recovery yang kepakai memang PBRP asli, bukan TWRP vanilla.
+      # =====================================================================
+      - name: Init & Sync PBRP Manifest
+        run: |
+          mkdir -p "${{ env.SYNC_PATH }}"
+          cd "${{ env.SYNC_PATH }}"
+
+          repo init \
+            --depth=1 \
+            --groups=default,-mips,-x86,-darwin \
+            -u "${{ env.PB_MANIFEST }}" \
+            -b "${{ env.PB_BRANCH }}" \
+            2>&1 | tee -a /tmp/full_build.log
+
+          repo sync \
+            -j$(nproc --all) \
+            --force-sync \
+            --no-clone-bundle \
+            --no-tags \
+            --optimized-fetch \
+            --prune \
+            2>&1 | tee -a /tmp/full_build.log
+
+          rm -rf .repo
+          df -h | tee -a /tmp/full_build.log
+
+      - name: Check Disk Space (after sync)
+        run: df -h
+
+      # =====================================================================
+      # Device tree: PAKAI ULANG twrp_device_xiaomi_vince (android-12.1) - lihat
+      # catatan DT_LINK di bagian env di atas soal kenapa device tree resmi
+      # PBRP (android-9.0) tidak dipakai.
+      # =====================================================================
+      - name: Clone Device Tree (vince)
+        run: |
+          cd "${{ env.SYNC_PATH }}"
+          rm -rf "device/${{ env.OEM }}/${{ env.DEVICE }}"
+          git clone --depth=1 \
+            "${{ env.DT_LINK }}" \
+            -b "${{ env.DT_BRANCH }}" \
+            "device/${{ env.OEM }}/${{ env.DEVICE }}" \
+            2>&1 | tee -a /tmp/full_build.log
+
+      # =====================================================================
+      # GANTI KERNEL PREBUILT: sama persis alasannya kayak workflow TWRP/
+      # OrangeFox kamu - kernel bawaan device tree (4.9.291) gak lengkap
+      # dukungan dynamic-partition (device-mapper) & MADV_WIPEONFORK.
+      # =====================================================================
+      - name: Replace Prebuilt Kernel (4.9, fix MADV_WIPEONFORK / dynamic partition support)
+        run: |
+          cd "${{ env.SYNC_PATH }}/device/${{ env.OEM }}/${{ env.DEVICE }}"
+          set -e
+          echo "== Download kernel custom 4.9 =="
+          curl -L -o prebuilt/Image.gz-dtb \
+            "https://github.com/rahmatsobrian/dummy/raw/refs/heads/main/Image.gz-dtb"
+          ls -la prebuilt/Image.gz-dtb
+          file prebuilt/Image.gz-dtb || true
+
+          echo "== Sesuaikan TARGET_KERNEL_VERSION di BoardConfig.mk =="
+          grep -n "^TARGET_KERNEL_VERSION" BoardConfig.mk
+          sed -i 's/^TARGET_KERNEL_VERSION := .*/TARGET_KERNEL_VERSION := 4.9/' BoardConfig.mk
+          grep -n "^TARGET_KERNEL_VERSION" BoardConfig.mk
+
+          echo "== BOARD_KERNEL_* saat ini (referensi debug kalau boot gagal) =="
+          grep "^BOARD_KERNEL_" BoardConfig.mk
+
+      # =====================================================================
+      # Dynamic partition patch: PERSIS sama kayak workflow TWRP/OrangeFox
+      # kamu - PBRP (android_bootable_recovery) tetap fork dari TWRP,
+      # PartitionManager & mekanisme fstab-nya sama persis, jadi semua bug
+      # "/system_root"/"super" yang kamu temuin & fix di situ berlaku juga
+      # di sini.
+      #
+      # DITAMBAHIN DI SINI (khusus PBRP, dari BUILD_FLAGS.md resmi):
+      # - MAINTAINER := "..." - flag build resmi PBRP buat nampilin nama
+      #   builder di halaman About PBRP. BEDA dari OF_MAINTAINER OrangeFox -
+      #   ini bukan env var shell, tapi langsung Makefile var di
+      #   BoardConfig.mk (dikonfirmasi dari pitchblackrecovery.com/docs/build-flags/).
+      # =====================================================================
+      - name: Patch Device Tree for Dynamic Partition (Super) Support + PBRP flags
+        run: |
+          cd "${{ env.SYNC_PATH }}/device/${{ env.OEM }}/${{ env.DEVICE }}"
+          set -e
+
+          echo "== Patch BoardConfig.mk =="
+          sed -i '/BOARD_SYSTEMIMAGE_PARTITION_SIZE/d;/BOARD_VENDORIMAGE_PARTITION_SIZE/d;/BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE/d' BoardConfig.mk
+
+          cat >> BoardConfig.mk << EOF
+
+          # ==== Dynamic Partitions (retrofit super) - vince/mi8953 ====
+          BOARD_SUPER_PARTITION_BLOCK_DEVICES := cust system
+          BOARD_SUPER_PARTITION_METADATA_DEVICE := system
+          BOARD_SUPER_PARTITION_CUST_DEVICE_SIZE := 536870912
+          BOARD_SUPER_PARTITION_SYSTEM_DEVICE_SIZE := 3221225472
+          BOARD_SUPER_PARTITION_SIZE := \$(shell expr \$(BOARD_SUPER_PARTITION_CUST_DEVICE_SIZE) + \$(BOARD_SUPER_PARTITION_SYSTEM_DEVICE_SIZE) )
+
+          BOARD_SUPER_PARTITION_GROUPS := mi8953_dynpart
+          BOARD_MI8953_DYNPART_SIZE := \$(shell expr \$(BOARD_SUPER_PARTITION_SIZE) - 4194304 )
+          BOARD_MI8953_DYNPART_PARTITION_LIST := product system system_ext odm vendor
+
+          TARGET_COPY_OUT_PRODUCT := product
+          TARGET_COPY_OUT_SYSTEM_EXT := system_ext
+          TARGET_COPY_OUT_VENDOR := vendor
+          TARGET_COPY_OUT_ODM := odm
+
+          BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
+          BOARD_PRODUCTIMAGE_FILE_SYSTEM_TYPE := ext4
+          BOARD_SYSTEM_EXTIMAGE_FILE_SYSTEM_TYPE := ext4
+          BOARD_ODMIMAGE_FILE_SYSTEM_TYPE := ext4
+
+          # TWRP/PBRP: aktifkan dukungan mount partisi logical
+          TW_INCLUDE_LOGICAL := true
+
+          # Jangan unmount /system, device ini dynamic partition (logical,
+          # bukan filesystem statis)
+          TW_NEVER_UNMOUNT_SYSTEM := true
+
+          TW_INCLUDE_RESETPROP := true
+          TW_INCLUDE_LIBRESETPROP := true
+
+          TW_USE_LEGACY_BATTERY_SERVICES := true
+          TW_CUSTOM_BATTERY_PATH := "/sys/class/power_supply/battery"
+
+          TW_CUSTOM_CPU_TEMP_PATH := /sys/class/thermal/thermal_zone11/temp
+
+          TW_BRIGHTNESS_PATH := /sys/class/leds/lcd-backlight/brightness
+          TW_MAX_BRIGHTNESS := 255
+          TW_DEFAULT_BRIGHTNESS := 150
+
+          TW_FRAMERATE := 60
+
+          TW_HAS_EDL_MODE := true
+
+          # ==== PBRP build flags resmi (pitchblackrecovery.com/docs/build-flags) ====
+          MAINTAINER := "${{ env.PB_MAINTAINER }}"
+
+          # dm-verity aktif secara default di PBRP; flag ini nge-untick opsi
+          # "Disable dm-verity" di menu sebelumnya, jadi dm-verity langsung
+          # nonaktif tanpa perlu disentuh manual dari recovery.
+          PB_DISABLE_DEFAULT_DM_VERITY := true
+
+          # CATATAN (belum diaktifkan, referensi kalau dibutuhkan nanti):
+          # PB_DISABLE_DEFAULT_TREBLE_COMP := true  # matiin treble compat check default
+          # PB_DISABLE_DEFAULT_PATCH_AVB2 := true   # JANGAN diaktifkan di device
+          #   MIUI A-only kayak vince - defaultnya (flag ini absen/false) PBRP
+          #   MEMANG sudah nge-patch AVB2 secara default, itu yang kita mau
+          #   (setara OF_PATCH_AVB20=1 di workflow OrangeFox kamu).
+          EOF
+          # CATATAN: PB_TORCH_PATH sengaja tidak diisi - path LED flash spesifik
+          # vince belum diverifikasi manual (beda mekanisme dari TW_BRIGHTNESS_PATH),
+          # jangan asal tebak.
+
+          # ===================================================================
+          # Fix fstab/merge-fstab: PERSIS pola yang sama kayak TWRP/OrangeFox
+          # kamu - error "Unable to find partition for path '/system_root'"
+          # bakal muncul juga di sini kalau gak dipatch.
+          # ===================================================================
+          echo "== Hapus entry /system & /system_image & /vendor statis dari twrp.fstab =="
+          FSTAB=recovery/root/system/etc/twrp.fstab
+          sed -i '/^\/system /d;/^\/system_image /d;/^\/vendor /d;/^\/vendor_image /d' "$FSTAB"
+          cat "$FSTAB"
+
+          echo "== Buat recovery.fstab base (tanpa entry system/vendor statis) =="
+          RFSTAB=recovery/root/system/etc/recovery.fstab
+          sed -i '/\/by-name\/system\s\+\/system/d;/\/by-name\/cust\s\+\/vendor/d' "$RFSTAB"
+          cat "$RFSTAB"
+
+          echo "== Buat twrp.flags.dynpart =="
+          cat > recovery/root/system/etc/twrp.flags.dynpart << 'EOF'
+          # mount point   fstype  device                      device2                     flags
+          /data           ext4    /dev/block/bootdevice/by-name/userdata                  flags=encryptable=footer;fsflags="discard"
+          /metadata       ext4    /dev/block/bootdevice/by-name/logdump                   flags=display="Metadata";fsflags="discard"
+          EOF
+
+          echo "== Buat twrp.flags.nondynpart =="
+          cat > recovery/root/system/etc/twrp.flags.nondynpart << 'EOF'
+          # mount point   fstype  device                      device2                     flags
+          /system_root    ext4    /dev/block/bootdevice/by-name/system                    flags=display="System";fsflags="discard";wipeingui
+          /system_image   emmc    /dev/block/bootdevice/by-name/system                    flags=display="System";backup=1;flashimg=1
+          /vendor         ext4    /dev/block/bootdevice/by-name/cust                      flags=display="Vendor";fsflags="discard";wipeingui
+          /vendor_image   emmc    /dev/block/bootdevice/by-name/cust                      flags=display="Vendor";backup=1;flashimg=1
+          /data           ext4    /dev/block/bootdevice/by-name/userdata                  flags=encryptable=footer;fsflags="discard"
+          /metadata       ext4    /dev/block/bootdevice/by-name/logdump                   flags=display="Metadata";fsflags="discard"
+          EOF
+
+          echo "== Buat merge-fstab.sh =="
+          mkdir -p recovery/root/system/bin
+          cat > recovery/root/system/bin/merge-fstab.sh << 'EOF'
+          #!/system/bin/sh
+          echo >> /system/etc/recovery.fstab
+          echo >> /system/etc/twrp.flags
+
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+              [ -e /dev/block/by-name/system ] && break
+              sleep 0.5
+          done
+          if [ -e /dev/block/by-name/system ]; then
+              ln -sf /dev/block/by-name/system /dev/block/by-name/super
+          else
+              echo "merge-fstab.sh: WARNING /dev/block/by-name/system belum ada setelah nunggu 5 detik" 1>&2
+          fi
+
+          if dd if=/dev/block/by-name/system bs=256k count=1 2>/dev/null | strings | grep -q mi8953_dynpart; then
+              cat /system/etc/twrp.flags.dynpart >> /system/etc/twrp.flags
+              echo >> /system/etc/recovery.fstab
+              for p in system system_ext product vendor odm; do
+                  if [ "$p" = "system" ]; then mnt="/system_root"; else mnt="/${p}"; fi
+                  echo "${p} ${mnt} ext4 rw,barrier=1,discard wait,logical" >> /system/etc/recovery.fstab
+              done
+
+              echo >> /system/etc/twrp.flags
+              for p in system system_ext product vendor odm; do
+                  if [ "$p" = "system" ]; then mnt="/system_root"; else mnt="/${p}"; fi
+                  if [ "$p" = "vendor" ] || [ "$p" = "odm" ]; then
+                      echo "${mnt} ext4 /dev/block/mapper/${p} flags=display=\"${p}\";backup=1;wipeingui;fsflags=\"ro\"" >> /system/etc/twrp.flags
+                  else
+                      echo "${mnt} ext4 /dev/block/mapper/${p} flags=display=\"${p}\";backup=1;wipeingui" >> /system/etc/twrp.flags
+                  fi
+              done
+
+              echo >> /system/etc/twrp.flags
+              for p in cust; do
+                  echo "/super_${p} emmc /dev/block/by-name/${p} flags=display=\"Super_${p}\";backup=1" >> /system/etc/twrp.flags
+              done
+          else
+              cat /system/etc/twrp.flags.nondynpart >> /system/etc/twrp.flags
+              echo >> /system/etc/twrp.flags
+              echo "/super emmc /dev/block/by-name/system flags=display=\"Super\";backup=1" >> /system/etc/twrp.flags
+              for p in cust; do
+                  echo "/super_${p} emmc /dev/block/by-name/${p} flags=display=\"Super_${p}\";backup=1" >> /system/etc/twrp.flags
+              done
+          fi
+          EOF
+          chmod 755 recovery/root/system/bin/merge-fstab.sh
+
+          echo "== Daftarkan merge-fstab.sh supaya jalan saat 'on init' recovery =="
+          INIT_RC=$(find recovery/root -maxdepth 1 -iname "init.recovery.*.rc" | head -1)
+          if [ -z "$INIT_RC" ]; then
+            INIT_RC="recovery/root/init.recovery.msm8953.rc"
+            touch "$INIT_RC"
+          fi
+          if ! grep -q "merge-fstab.sh" "$INIT_RC"; then
+            cat >> "$INIT_RC" << 'EOF'
+
+          on init
+              exec u:r:recovery:s0 root root -- /system/bin/merge-fstab.sh
+          EOF
+          fi
+          grep -B 1 -A 2 "merge-fstab" "$INIT_RC"
+
+          echo "== Ringkasan =="
+          tail -n 35 BoardConfig.mk
+
+      # =====================================================================
+      # Sama seperti workflow OrangeFox kamu: BoardConfig.mk cuma nyimpen
+      # penanda BOARD_SUPER_PARTITION_* (dibaca liblp/TWRP), sedangkan Makefile
+      # PBRP (kalau ada pengecekan serupa orangefox.mk) baca penanda standar
+      # AOSP PRODUCT_USE_DYNAMIC_PARTITIONS yang normalnya ada di device.mk.
+      # Ditambahkan sebagai jaring pengaman - device tree ini belum pernah
+      # menyetelnya sendiri.
+      # =====================================================================
+      - name: Enable PRODUCT_USE_DYNAMIC_PARTITIONS in device.mk
+        run: |
+          cd "${{ env.SYNC_PATH }}/device/${{ env.OEM }}/${{ env.DEVICE }}"
+          set -e
+
+          MKFILE="device.mk"
+          if [ ! -f "$MKFILE" ]; then
+            echo "❌ device.mk tidak ditemukan, cek struktur device tree manual"
+            exit 1
+          fi
+
+          echo "== Sebelum =="
+          grep -n "PRODUCT_USE_DYNAMIC_PARTITIONS\|PRODUCT_RETROFIT_DYNAMIC_PARTITIONS" "$MKFILE" || true
+
+          cat >> "$MKFILE" << 'EOF'
+
+          # ==== Dynamic Partitions (penanda standar AOSP) ====
+          PRODUCT_USE_DYNAMIC_PARTITIONS := true
+          PRODUCT_RETROFIT_DYNAMIC_PARTITIONS := true
+          EOF
+
+          echo "== Sesudah =="
+          tail -n 6 "$MKFILE"
+
+      # =====================================================================
+      # KHUSUS PBRP: device tree ini datang dari workflow TWRP (twrp_vince.mk,
+      # inherit vendor/twrp/config/common.mk) - PBRP butuh product makefile-nya
+      # SENDIRI (pb_vince.mk, inherit vendor/pb/config/common.mk) supaya
+      # "lunch pb_vince-eng" bisa nemu product-nya (dikonfirmasi dari
+      # pb_device.mk.sample.md resmi manifest_pb).
+      #
+      # PRODUCT_RELEASE_NAME di-derive otomatis dari nama file (pb_vince.mk
+      # -> "vince"), jadi PRODUCT_NAME hasil akhirnya "pb_vince" - persis
+      # yang dicari lunch.
+      # =====================================================================
+      - name: Create pb_vince.mk & Register in AndroidProducts.mk
+        run: |
+          cd "${{ env.SYNC_PATH }}/device/${{ env.OEM }}/${{ env.DEVICE }}"
+          set -e
+
+          echo "== Buat pb_vince.mk =="
+          cat > pb_vince.mk << 'EOF'
+          #
+          # pb_vince.mk - product makefile PBRP untuk vince (mi8953/MSM8953)
+          # Diadaptasi dari twrp_vince.mk bawaan device tree, diganti supaya
+          # inherit config PBRP (vendor/pb/config/common.mk) sesuai
+          # pb_device.mk.sample.md resmi manifest_pb.
+          #
+
+          # Release name (otomatis diambil dari suffix nama file ini)
+          PRODUCT_RELEASE_NAME := $(lastword $(subst /, ,$(lastword $(subst _, ,$(firstword $(subst ., ,$(MAKEFILE_LIST)))))))
+
+          $(call inherit-product, $(SRC_TARGET_DIR)/product/aosp_base.mk)
+
+          # Inherit config PBRP (BUKAN vendor/twrp/config/common.mk)
+          $(call inherit-product, vendor/pb/config/common.mk)
+
+          # Inherit device configuration
+          $(call inherit-product, device/xiaomi/vince/device.mk)
+
+          # Device identifier. Harus setelah semua inherit di atas
+          PRODUCT_NAME := pb_$(PRODUCT_RELEASE_NAME)
+          PRODUCT_DEVICE := $(PRODUCT_RELEASE_NAME)
+          PRODUCT_BRAND := Xiaomi
+          PRODUCT_MANUFACTURER := Xiaomi
+          PRODUCT_MODEL := Redmi 5 Plus
+          EOF
+          echo "== pb_vince.mk dibuat =="
+          cat pb_vince.mk
+
+          echo "== Daftarkan di AndroidProducts.mk =="
+          if ! grep -q "pb_vince.mk" AndroidProducts.mk; then
+            sed -i 's#\$(LOCAL_DIR)/twrp_vince.mk#\$(LOCAL_DIR)/twrp_vince.mk \\\n    $(LOCAL_DIR)/pb_vince.mk#' AndroidProducts.mk
+          fi
+          echo "== Isi AndroidProducts.mk =="
+          cat AndroidProducts.mk
+
+      - name: Increase Kernel/Recovery Log Verbosity (for debugging)
+        run: |
+          cd "${{ env.SYNC_PATH }}/device/${{ env.OEM }}/${{ env.DEVICE }}"
+          sed -i 's/^BOARD_KERNEL_CMDLINE := /BOARD_KERNEL_CMDLINE := printk.devkmsg=on loglevel=8 /' BoardConfig.mk
+          grep "^BOARD_KERNEL_CMDLINE" BoardConfig.mk
+          grep -q "^TWRP_INCLUDE_LOGCAT" BoardConfig.mk || echo "TWRP_INCLUDE_LOGCAT := true" >> BoardConfig.mk
+          grep -q "^TARGET_USES_LOGD" BoardConfig.mk || echo "TARGET_USES_LOGD := true" >> BoardConfig.mk
+
+      - name: Patch TW_DEVICE_VERSION (ganti nama maintainer di splash)
+        run: |
+          cd "${{ env.SYNC_PATH }}/device/${{ env.OEM }}/${{ env.DEVICE }}"
+          set -e
+          grep -n "^TW_DEVICE_VERSION" BoardConfig.mk || true
+          if grep -q "^TW_DEVICE_VERSION" BoardConfig.mk; then
+            sed -i 's/^TW_DEVICE_VERSION := .*/TW_DEVICE_VERSION := Redmi 5 Plus | RahmatSobrian/' BoardConfig.mk
+          else
+            echo "TW_DEVICE_VERSION := Redmi 5 Plus | RahmatSobrian" >> BoardConfig.mk
+          fi
+          grep -n "^TW_DEVICE_VERSION" BoardConfig.mk
+
+      - name: Check Disk Space (before compile)
+        run: df -h
+
+      - name: Show Biggest Folders (debug)
+        working-directory: ${{ env.SYNC_PATH }}
+        run: |
+          echo "== Top 15 folder terbesar =="
+          du -h --max-depth=1 . 2>/dev/null | sort -rh | head -15
+          echo ""
+          echo "== Total ukuran =="
+          du -sh . 2>/dev/null
+
+      - name: Notify Telegram - Compiling
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          curl -s -w "\n[TG_HTTP:%{http_code}]" -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            -d parse_mode="Markdown" \
+            -d text="⚙️ *Compiling PBRP...*
+            📱 *Target:* `pb_vince-eng`
+            🧵 *Threads:* $(nproc --all) cores
+            🔨 Build sedang berjalan, harap tunggu..."
+
+      - name: Start Disk Monitor (background)
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          (
+            ALERTED=false
+            while true; do
+              echo "=== $(date +%H:%M:%S) ===" >> /tmp/disk_monitor.log
+              df -h >> /tmp/disk_monitor.log
+              echo "" >> /tmp/disk_monitor.log
+
+              USAGE=$(df / | tail -1 | awk '{print $5}' | tr -d '%')
+              AVAIL=$(df -h / | tail -1 | awk '{print $4}')
+
+              if [ "$USAGE" -ge 85 ] && [ "$ALERTED" = false ]; then
+                ALERTED=true
+                curl -s -w "\n[TG_HTTP:%{http_code}]" -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+                  -d chat_id="${TG_CHAT_ID}" \
+                  -d parse_mode="Markdown" \
+                  -d text="⚠️ *Disk Space Kritis!*
+              💾 Terpakai: ${USAGE}% (sisa: ${AVAIL})
+              🕒 $(date +%H:%M:%S)
+              📱 Build PBRP vince masih jalan, kemungkinan bakal gagal karena disk penuh."
+              fi
+
+              sleep 120
+            done
+          ) &
+          echo "DISK_MONITOR_PID=$!" >> $GITHUB_ENV
+
+      # =====================================================================
+      # Build - persis "How To Build" resmi README manifest_pb:
+      #   . build/envsetup.sh
+      #   lunch pb_<device>-eng
+      #   mka pbrp
+      # =====================================================================
+      - name: Start Build (with log)
+        working-directory: ${{ env.SYNC_PATH }}
+        env:
+          KBUILD_BUILD_USER: "RahmatSobrian"
+          KBUILD_BUILD_HOST: "YoruProject"
+        run: |
+          mkdir -p logs
+          export ALLOW_MISSING_DEPENDENCIES=true
+          export LC_ALL=C
+
+          set +e
+          . build/envsetup.sh
+          set -e
+
+          if ! type lunch &>/dev/null; then
+            echo "❌ lunch not found" | tee -a /tmp/full_build.log
+            exit 1
+          fi
+
+          lunch pb_vince-eng
+          if [ $? -ne 0 ]; then
+            echo "❌ lunch failed" | tee -a /tmp/full_build.log
+            exit 1
+          fi
+
+          echo "TARGET_PRODUCT=$TARGET_PRODUCT" | tee -a /tmp/full_build.log
+          echo "TARGET_DEVICE=$TARGET_DEVICE" | tee -a /tmp/full_build.log
+
+          if [ "$TARGET_PRODUCT" != "pb_vince" ]; then
+            echo "❌ TARGET_PRODUCT salah: $TARGET_PRODUCT" | tee -a /tmp/full_build.log
+            exit 1
+          fi
+
+          mka -j$(nproc --all) "${{ env.TARGET }}" 2>&1 | tee logs/build.txt | tee -a /tmp/full_build.log
+
+      - name: Stop Disk Monitor & Save Log
+        if: always()
+        run: |
+          kill "$DISK_MONITOR_PID" 2>/dev/null || true
+          echo "=== FINAL $(date +%H:%M:%S) ===" >> /tmp/disk_monitor.log
+          df -h >> /tmp/disk_monitor.log
+          mkdir -p "${{ env.SYNC_PATH }}/debug-info"
+          cp /tmp/disk_monitor.log "${{ env.SYNC_PATH }}/debug-info/disk_monitor.log" 2>/dev/null || true
+
+      - name: Check Disk Space (after compile)
+        if: always()
+        run: df -h
+
+      - name: Upload Build Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: ${{ env.SYNC_PATH }}/logs/build.txt
+
+      - name: Collect Debug Info (final fstab & config actually embedded)
+        if: always()
+        working-directory: ${{ env.SYNC_PATH }}
+        run: |
+          mkdir -p debug-info
+          OUT=out/target/product/${{ env.DEVICE }}/recovery/root/system/etc
+          cp -v "$OUT/twrp.fstab" debug-info/twrp.fstab.final 2>/dev/null || echo "twrp.fstab.final: tidak ditemukan" > debug-info/twrp.fstab.final
+          cp -v "$OUT/recovery.fstab" debug-info/recovery.fstab.final 2>/dev/null || echo "recovery.fstab.final: tidak ditemukan" > debug-info/recovery.fstab.final
+          cp -v "device/${{ env.OEM }}/${{ env.DEVICE }}/BoardConfig.mk" debug-info/BoardConfig.mk.used 2>/dev/null || true
+          cp -v "device/${{ env.OEM }}/${{ env.DEVICE }}/pb_vince.mk" debug-info/pb_vince.mk.used 2>/dev/null || true
+          echo "Build finished at $(date)" > debug-info/build-meta.txt
+          echo "TARGET_PRODUCT=pb_${{ env.DEVICE }}" >> debug-info/build-meta.txt
+          echo "PB_BRANCH=${{ env.PB_BRANCH }}" >> debug-info/build-meta.txt
+
+      - name: Upload Debug Info
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pbrp-vince-debug-info
+          path: ${{ env.SYNC_PATH }}/debug-info
+        continue-on-error: true
+
+      - name: Upload recovery.img
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pbrp-vince-recovery
+          path: ${{ env.SYNC_PATH }}/out/target/product/${{ env.DEVICE }}/recovery.img
+
+      # Penamaan output PBRP: "PBRP-<device>-<version>-<tanggal>-<jam>-<OFFICIAL/UNOFFICIAL>.zip"
+      # (dikonfirmasi dari contoh file resmi yang kamu upload)
+      - name: Upload PBRP zip
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pbrp-vince-zip
+          path: ${{ env.SYNC_PATH }}/out/target/product/${{ env.DEVICE }}/PBRP-*.zip
+        continue-on-error: true
+
+      - name: Notify Telegram - Build Success
+        if: success()
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          BUILD_DATE=$(date +"%Y-%m-%d %H:%M:%S UTC")
+          IMG_SIZE=$(du -sh "${{ env.SYNC_PATH }}/out/target/product/${{ env.DEVICE }}/recovery.img" 2>/dev/null | cut -f1 || echo "N/A")
+          DISK_FINAL=$(df -h / | tail -1 | awk '{print "Terpakai "$5" (sisa "$4")"}')
+          curl -s -w "\n[TG_HTTP:%{http_code}]" -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            -d parse_mode="Markdown" \
+            -d text="✅ *PBRP Build Sukses!*
+            📱 *Device:* Xiaomi Redmi 5 Plus (vince) - mi8953
+            🌿 *Branch:* `${{ env.PB_BRANCH }}`
+            📦 *Image Size:* ${IMG_SIZE}
+            💾 *Disk saat selesai:* ${DISK_FINAL}
+            🕒 *Selesai:* ${BUILD_DATE}
+            📥 Artifacts: \`recovery.img\` • \`PBRP-*.zip\` • \`build.txt\` • \`disk_monitor.log\`
+            🔗 [Download](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            ⬛ *PBRP vince berhasil di-build!*"
+
+      - name: Send Disk Monitor Log to Telegram on Failure
+        if: failure()
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          if [ -f /tmp/disk_monitor.log ]; then
+            curl -s -w "\n[TG_HTTP:%{http_code}]" -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
+              -F chat_id="${TG_CHAT_ID}" \
+              -F document=@/tmp/disk_monitor.log \
+              -F caption="💾 Disk usage log tiap 2 menit selama build (PBRP vince, FAILED)"
+          fi
+
+      - name: Upload Full Log to Telegram on Failure
+        if: failure()
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          mkdir -p "${{ env.SYNC_PATH }}/logs"
+          cat /tmp/full_build.log >> "${{ env.SYNC_PATH }}/logs/build.txt" 2>/dev/null || true
+
+          LOG_FILE="${{ env.SYNC_PATH }}/logs/build.txt"
+          if [ ! -f "$LOG_FILE" ]; then
+            LOG_FILE="/tmp/full_build.log"
+          fi
+
+          if [ -f "$LOG_FILE" ]; then
+            FILE_SIZE=$(du -m "$LOG_FILE" | cut -f1)
+            if [ "$FILE_SIZE" -gt 45 ]; then
+              gzip -k "$LOG_FILE"
+              curl -s -w "\n[TG_HTTP:%{http_code}]" -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
+                -F chat_id="${TG_CHAT_ID}" \
+                -F document=@"${LOG_FILE}.gz" \
+                -F caption="📄 Full build log (compressed) - PBRP vince (FAILED)"
+            else
+              curl -s -w "\n[TG_HTTP:%{http_code}]" -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
+                -F chat_id="${TG_CHAT_ID}" \
+                -F document=@"${LOG_FILE}" \
+                -F caption="📄 Full build log - PBRP vince (FAILED)"
+            fi
+          fi
+
+      - name: Notify Telegram - Build Failed
+        if: failure()
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          BUILD_DATE=$(date +"%Y-%m-%d %H:%M:%S UTC")
+          DISK_FINAL=$(df -h / | tail -1 | awk '{print "Terpakai "$5" (sisa "$4")"}' 2>/dev/null || echo "N/A")
+          curl -s -w "\n[TG_HTTP:%{http_code}]" -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            -d parse_mode="Markdown" \
+            -d text="❌ *PBRP Build GAGAL!*
+            📱 *Device:* Xiaomi Redmi 5 Plus (vince) - mi8953
+            🌿 *Branch:* `${{ env.PB_BRANCH }}`
+            💾 *Disk saat gagal:* ${DISK_FINAL}
+            🕒 *Waktu:* ${BUILD_DATE}
+            📄 Full log & `disk_monitor.log` sudah dikirim/tersedia di artifacts.
+            🔗 [Lihat Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"

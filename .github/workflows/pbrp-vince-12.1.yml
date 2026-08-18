@@ -275,9 +275,11 @@ jobs:
           grep -n -B 1 -A 8 "LOOP_SET_FD" "$APEX_CPP"
 
           echo "== Verifikasi tambahan: pastikan tidak ada baris string C++ yang belum ditutup =="
-          # Cek sederhana: hitung tanda kutip ganda di sekitar area yang dipatch,
-          # harus genap (setiap string dibuka pasti ditutup di baris yang sama)
-          if grep -n "LOGINFO(\"Loop device" "$APEX_CPP" | grep -qv '\\\\n"'; then
+          # Cek pakai grep -F (fixed string, BUKAN regex) - versi awal
+          # kemarin pakai regex yang salah dan false-positive gagal walau
+          # patch-nya benar (sudah diverifikasi ulang di sandbox sebelum
+          # ditaruh di sini).
+          if ! grep -qF 'retrying\n", loop_device.c_str());' "$APEX_CPP"; then
             echo "❌ WARNING: baris LOGINFO hasil patch kelihatan gak lengkap, cek manual!"
             exit 1
           fi

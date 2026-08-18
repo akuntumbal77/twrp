@@ -158,6 +158,102 @@ jobs:
         run: df -h
 
       # =====================================================================
+      # [PATCH BARU] Fix APEX loop-device-busy (bagian 2/2): patch twrpApex.cpp
+      #
+      # ROOT CAUSE (source: bootable/recovery/twrpApex.cpp, fungsi
+      # loadApexImage()): ioctl(loop_fd, LOOP_SET_FD, fd) gagal dengan EBUSY
+      # karena loop_device yang dipilih (loop0, dari LOOP_CTL_GET_FREE) sudah
+      # "dipegang" file descriptor lain sebelumnya, dan sisa attach itu tidak
+      # pernah di-LOOP_CLR_FD.
+      #
+      # FIX: sebelum LOOP_SET_FD, coba LOOP_CLR_FD dulu secara paksa (abaikan
+      # hasilnya - kalau memang belum ada yang nempel, ini no-op aman), lalu
+      # retry LOOP_SET_FD sekali. Ditaruh SETELAH source sync (source harus
+      # sudah ada) dan SEBELUM compile.
+      #
+      # Kalau pattern regex di bawah tidak match source PBRP (fork bisa beda
+      # formatting dari TWRP upstream), step ini akan GAGAL DENGAN JELAS
+      # (exit 1) dan mem-print isi loadApexImage() yang sebenarnya untuk
+      # didebug, bukan silently skip.
+      # =====================================================================
+      - name: Patch twrpApex.cpp - fix loop-device EBUSY on APEX mount
+        run: |
+          cd "${{ env.SYNC_PATH }}"
+          set -e
+
+          APEX_CPP="bootable/recovery/twrpApex.cpp"
+
+          if [ ! -f "$APEX_CPP" ]; then
+            echo "⚠️ $APEX_CPP tidak ditemukan, skip patch (mungkin sudah dipindah/tidak ada di source ini)"
+            exit 0
+          fi
+
+          echo "== Sebelum patch (bagian LOOP_SET_FD) =="
+          grep -n -A 3 "LOOP_SET_FD" "$APEX_CPP" || true
+
+          if grep -q "LOOP_CLR_FD, 0); // twrpApex-fix" "$APEX_CPP"; then
+            echo "Patch sudah pernah diterapkan, skip"
+          else
+            python3 << 'PYEOF'
+          import re
+          import sys
+
+          path = "bootable/recovery/twrpApex.cpp"
+          with open(path, "r") as f:
+              content = f.read()
+
+          # Regex toleran terhadap variasi whitespace/indentasi antar fork
+          # PBRP/TWRP, supaya tidak silent-fail kalau formatting sedikit beda
+          # dari source referensi yang dipakai saat menulis patch ini.
+          pattern = re.compile(
+              r'if\s*\(ioctl\(loop_fd,\s*LOOP_SET_FD,\s*fd\)\s*<\s*0\)\s*\{\s*'
+              r'LOGERR\("failed to mount %s to loop device %s\. Reason: %s\\n",\s*'
+              r'fileToMount\.c_str\(\),\s*loop_device\.c_str\(\),\s*'
+              r'strerror\(errno\)\);\s*'
+              r'close\(fd\);\s*'
+              r'close\(loop_fd\);\s*'
+              r'return false;\s*'
+              r'\}',
+              re.MULTILINE
+          )
+
+          replacement = (
+              'if (ioctl(loop_fd, LOOP_SET_FD, fd) < 0) {\n'
+              '\t\t// twrpApex-fix: loop device mungkin masih "busy" dari attach\n'
+              '\t\t// sebelumnya yang tidak sempat di-cleanup. Paksa clear lalu\n'
+              '\t\t// retry sekali sebelum benar-benar menyerah.\n'
+              '\t\tLOGINFO("Loop device %s busy, forcing clear and retrying\\n", loop_device.c_str());\n'
+              '\t\tioctl(loop_fd, LOOP_CLR_FD, 0); // twrpApex-fix\n'
+              '\t\tif (ioctl(loop_fd, LOOP_SET_FD, fd) < 0) {\n'
+              '\t\t\tLOGERR("failed to mount %s to loop device %s. Reason: %s\\n", fileToMount.c_str(), loop_device.c_str(),\n'
+              '\t\t\t\tstrerror(errno));\n'
+              '\t\t\tclose(fd);\n'
+              '\t\t\tclose(loop_fd);\n'
+              '\t\t\treturn false;\n'
+              '\t\t}\n'
+              '\t}'
+          )
+
+          new_content, n = pattern.subn(replacement, content, count=1)
+
+          if n == 0:
+              print("PATTERN_NOT_FOUND - patch tidak diterapkan, source formatting beda dari yang diharapkan")
+              print("== Isi loadApexImage() saat ini untuk debug manual ==")
+              m = re.search(r'bool twrpApex::loadApexImage.*?\n\}', content, re.DOTALL)
+              if m:
+                  print(m.group(0))
+              sys.exit(1)
+
+          with open(path, "w") as f:
+              f.write(new_content)
+          print("PATCH_APPLIED")
+          PYEOF
+          fi
+
+          echo "== Sesudah patch =="
+          grep -n -B 1 -A 8 "LOOP_SET_FD" "$APEX_CPP"
+
+      # =====================================================================
       # Device tree: PAKAI ULANG twrp_device_xiaomi_vince (android-12.1) - lihat
       # catatan DT_LINK di bagian env di atas soal kenapa device tree resmi
       # PBRP (android-9.0) tidak dipakai.
@@ -207,6 +303,20 @@ jobs:
       #   builder di halaman About PBRP. BEDA dari OF_MAINTAINER OrangeFox -
       #   ini bukan env var shell, tapi langsung Makefile var di
       #   BoardConfig.mk (dikonfirmasi dari pitchblackrecovery.com/docs/build-flags/).
+      #
+      # [PATCH BARU] Fix senter/torch: PB_TORCH_PATH sekarang DIISI (dulu
+      # sengaja dikosongkan). Hasil `adb shell ls /sys/class/leds/` di device
+      # vince nunjukin beberapa kandidat node torch (led:flash_0, led:flash_1,
+      # led:torch_0, led:torch_1, torch-light0, torch-light1). Dicek
+      # max_brightness tiap node: flash_0/1 = 1000 (photo flash, arus
+      # tinggi), torch_0/1 = 200 (raw kernel PMIC node, butuh nilai mA
+      # langsung), torch-light0/1 = 255 (skala brightness standar Android
+      # 0-255) - torch-light0 dipilih karena paling konsisten dgn cara TWRP
+      # toggle torch (level brightness sederhana, bukan raw current).
+      # Root cause bug lama: tanpa PB_TORCH_PATH, PBRP fallback ke
+      # auto-detect node LED dan salah nebak '/sys/class/leds/./brightness'
+      # (itu backlight LCD, bukan flash LED) - log recovery.log menunjukkan
+      # "Incorrect Flashlight Path" berulang kali.
       # =====================================================================
       - name: Patch Device Tree for Dynamic Partition (Super) Support + PBRP flags
         run: |
@@ -262,6 +372,11 @@ jobs:
 
           TW_HAS_EDL_MODE := true
 
+          # ==== Flashlight/Torch path (fix: senter tidak nyala) ====
+          # Dikonfirmasi via adb shell (max_brightness): torch-light0 = 255,
+          # skala standar Android, paling cocok utk toggle torch TWRP/PBRP.
+          PB_TORCH_PATH := "/sys/class/leds/torch-light0/brightness"
+
           # ==== PBRP build flags resmi (pitchblackrecovery.com/docs/build-flags) ====
           # PENTING: TANPA tanda kutip di sini. Source resmi PBRP
           # (bootable/recovery/twrp.cpp) sudah otomatis wrap value ini jadi
@@ -282,9 +397,6 @@ jobs:
           #   MEMANG sudah nge-patch AVB2 secara default, itu yang kita mau
           #   (setara OF_PATCH_AVB20=1 di workflow OrangeFox kamu).
           EOF
-          # CATATAN: PB_TORCH_PATH sengaja tidak diisi - path LED flash spesifik
-          # vince belum diverifikasi manual (beda mekanisme dari TW_BRIGHTNESS_PATH),
-          # jangan asal tebak.
 
           # ===================================================================
           # Fix fstab/merge-fstab: PERSIS pola yang sama kayak TWRP/OrangeFox
@@ -385,7 +497,101 @@ jobs:
           grep -B 1 -A 2 "merge-fstab" "$INIT_RC"
 
           echo "== Ringkasan =="
-          tail -n 35 BoardConfig.mk
+          tail -n 40 BoardConfig.mk
+
+      # =====================================================================
+      # [PATCH BARU] Fix MTP: MicroSD tidak muncul di MTP (PC) walau normal
+      # di OrangeFox/TWRP.
+      #
+      # ROOT CAUSE: Device tree upstream (twrp_device_xiaomi_vince,
+      # android-12.1) ASLINYA punya baris eksplisit di twrp.fstab:
+      #   /external_sd  auto  /dev/block/mmcblk1p1  flags=display="MicroSD";storage;wipeingui;removable
+      # dan di recovery.fstab:
+      #   /devices/platform/soc/7864900.sdhci/mmc_host* auto auto defaults wait,voldmanaged=sdcard1:auto,noemulatedsd,encryptable=userdata
+      #
+      # Step "Patch Device Tree for Dynamic Partition" di atas MEMBANGUN
+      # ULANG twrp.fstab & recovery.fstab dari nol lewat
+      # twrp.flags.dynpart/nondynpart + merge-fstab.sh (untuk sisipkan entry
+      # system_root/system_ext/product/vendor/odm/super secara dynamic),
+      # tapi proses rebuild itu TIDAK ikut menyalin baris /external_sd &
+      # voldmanaged sdcard1 dari fstab asli - makanya SD card fisik hilang
+      # dari daftar storage yang di-expose ke MTP (walau tetap ke-mount &
+      # terlihat normal di UI recovery lewat auto-detect generik 'auto0-1').
+      #
+      # FIX: tambahkan balik baris /external_sd & voldmanaged sdcard1 ke
+      # KEDUA template flags (dynpart & nondynpart) supaya SELALU ada
+      # terlepas device lagi pakai dynamic partition atau tidak - karena SD
+      # card fisik bukan bagian dari skema super partition, dia harus selalu
+      # ada di kedua kasus.
+      # =====================================================================
+      - name: Fix Missing SD Card Entry (restore MTP visibility)
+        run: |
+          cd "${{ env.SYNC_PATH }}/device/${{ env.OEM }}/${{ env.DEVICE }}"
+          set -e
+
+          echo "== Tambahkan /external_sd ke twrp.flags.dynpart =="
+          if ! grep -q "external_sd" recovery/root/system/etc/twrp.flags.dynpart; then
+            cat >> recovery/root/system/etc/twrp.flags.dynpart << 'EOF'
+          /external_sd    auto    /dev/block/mmcblk1p1                                      flags=display="MicroSD";storage;wipeingui;removable
+          EOF
+          fi
+
+          echo "== Tambahkan /external_sd ke twrp.flags.nondynpart =="
+          if ! grep -q "external_sd" recovery/root/system/etc/twrp.flags.nondynpart; then
+            cat >> recovery/root/system/etc/twrp.flags.nondynpart << 'EOF'
+          /external_sd    auto    /dev/block/mmcblk1p1                                      flags=display="MicroSD";storage;wipeingui;removable
+          EOF
+          fi
+
+          echo "== Tambahkan voldmanaged sdcard1 ke recovery.fstab =="
+          RFSTAB=recovery/root/system/etc/recovery.fstab
+          if ! grep -q "voldmanaged=sdcard1" "$RFSTAB"; then
+            cat >> "$RFSTAB" << 'EOF'
+          /devices/platform/soc/7864900.sdhci/mmc_host*		auto			auto	defaults						wait,voldmanaged=sdcard1:auto,noemulatedsd,encryptable=userdata
+          EOF
+          fi
+
+          echo "== Verifikasi =="
+          echo "--- twrp.flags.dynpart ---"
+          cat recovery/root/system/etc/twrp.flags.dynpart
+          echo "--- twrp.flags.nondynpart ---"
+          cat recovery/root/system/etc/twrp.flags.nondynpart
+          echo "--- recovery.fstab (baris sdcard) ---"
+          grep -i "sdhci\|mmc_host" "$RFSTAB"
+
+      # =====================================================================
+      # [PATCH BARU] Fix APEX loop-device-busy (bagian 1/2): tambah reservasi
+      # loop device.
+      #
+      # ROOT CAUSE: BoardConfig.mk vince punya "loop.max_part=7" (partisi per
+      # loop device) tapi TIDAK ADA "max_loop=" (jumlah loop device
+      # /dev/loopN yang di-reserve modul kernel loop saat boot). Tanpa
+      # max_loop eksplisit, kernel pakai default (biasanya 8), dan node
+      # /dev/block/loop0 bisa konflik dgn proses lain yang sempat pegang
+      # node itu duluan, sehingga PBRP dapat EBUSY saat ioctl(LOOP_SET_FD)
+      # di twrpApex.cpp::loadApexImage() - ini pelengkap patch source
+      # twrpApex.cpp di atas (bagian 2/2), keduanya saling melengkapi:
+      # yang ini mengurangi kemungkinan collision, yang source patch
+      # menuntaskan collision kalau tetap terjadi.
+      #
+      # FIX: naikkan max_loop ke 16 supaya APEX loader punya lebih banyak
+      # pilihan node kosong.
+      # =====================================================================
+      - name: Fix APEX loop-device-busy - increase max_loop reservation
+        run: |
+          cd "${{ env.SYNC_PATH }}/device/${{ env.OEM }}/${{ env.DEVICE }}"
+          set -e
+
+          grep -n "^BOARD_KERNEL_CMDLINE" BoardConfig.mk
+
+          if grep -q "max_loop=" BoardConfig.mk; then
+            sed -i 's/max_loop=[0-9]*/max_loop=16/' BoardConfig.mk
+          else
+            sed -i 's/loop\.max_part=7/loop.max_part=7 max_loop=16/' BoardConfig.mk
+          fi
+
+          echo "== Hasil =="
+          grep -n "^BOARD_KERNEL_CMDLINE" BoardConfig.mk
 
       # =====================================================================
       # Sama seperti workflow OrangeFox kamu: BoardConfig.mk cuma nyimpen

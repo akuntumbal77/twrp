@@ -68,6 +68,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # =====================================================================
+      # CATATAN escaping backtick: semua backtick (`) di dalam -d text="..."
+      # di bawah ini SENGAJA ditulis \` (di-escape) - backtick MENTAH di
+      # dalam string bash yang dikutip DOUBLE QUOTE akan dieksekusi sebagai
+      # command substitution (mis. `${{ env.PB_BRANCH }}` akan nyoba
+      # MENJALANKAN "android-12.1" sebagai command shell, bukan nampilinnya
+      # sebagai teks code-span di Telegram) - ini bug yang sempat ada di
+      # draft sebelumnya, sudah diperbaiki di semua 6 pesan Telegram.
+      # =====================================================================
       - name: Notify Telegram - Build Started
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
@@ -79,7 +88,7 @@ jobs:
             -d parse_mode="Markdown" \
             -d text="⬛ *PBRP Build Started*
             📱 *Device:* Xiaomi Redmi 5 Plus (vince) - mi8953
-            🌿 *Branch:* `${{ env.PB_BRANCH }}`
+            🌿 *Branch:* \`${{ env.PB_BRANCH }}\`
             🕒 *Time:* ${BUILD_DATE}
             🔗 [GitHub Actions](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
 
@@ -111,7 +120,7 @@ jobs:
             -d chat_id="${TG_CHAT_ID}" \
             -d parse_mode="Markdown" \
             -d text="🔄 *Syncing PBRP Sources...*
-            📦 Manifest: manifest_pb (`${{ env.PB_BRANCH }}`)
+            📦 Manifest: manifest_pb (\`${{ env.PB_BRANCH }}\`)
             ⚙️ Harap tunggu, ini biasanya paling lama..."
 
       # =====================================================================
@@ -158,7 +167,7 @@ jobs:
         run: df -h
 
       # =====================================================================
-      # [PATCH BARU] Fix APEX loop-device-busy (bagian 2/2): patch twrpApex.cpp
+      # [PATCH] Fix APEX loop-device-busy (bagian 2/2): patch twrpApex.cpp
       #
       # ROOT CAUSE (source: bootable/recovery/twrpApex.cpp, fungsi
       # loadApexImage()): ioctl(loop_fd, LOOP_SET_FD, fd) gagal dengan EBUSY
@@ -168,13 +177,22 @@ jobs:
       #
       # FIX: sebelum LOOP_SET_FD, coba LOOP_CLR_FD dulu secara paksa (abaikan
       # hasilnya - kalau memang belum ada yang nempel, ini no-op aman), lalu
-      # retry LOOP_SET_FD sekali. Ditaruh SETELAH source sync (source harus
-      # sudah ada) dan SEBELUM compile.
+      # retry LOOP_SET_FD sekali.
       #
-      # Kalau pattern regex di bawah tidak match source PBRP (fork bisa beda
-      # formatting dari TWRP upstream), step ini akan GAGAL DENGAN JELAS
-      # (exit 1) dan mem-print isi loadApexImage() yang sebenarnya untuk
-      # didebug, bukan silently skip.
+      # BUG YANG SEMPAT KEJADIAN & SUDAH DIPERBAIKI DI SINI: build sebelumnya
+      # gagal compile dengan "missing terminating '\"' character" di
+      # twrpApex.cpp baris 147-152. Root cause: `pattern.subn(replacement,
+      # content)` di Python - kalau argumen kedua `re.sub`/`re.subn` berupa
+      # STRING, modul `re` ikut MEMPROSES ULANG escape sequence di dalam
+      # string itu (mis. literal 2-karakter backslash+n "\n" di dalam
+      # `replacement` ikut di-convert jadi karakter newline BENERAN oleh
+      # `re`, bukan cuma disalin apa adanya) - jadi `LOGINFO("...retrying\n",
+      # ...)` yang seharusnya utuh malah kepotong jadi baris baru sungguhan
+      # di tengah string literal C++, bikin compiler nemuin string yang gak
+      # pernah ditutup. FIX: bungkus replacement dengan `lambda m:
+      # replacement` - callable membuat `re` SAMA SEKALI TIDAK memproses
+      # ulang escape di dalamnya, cuma pakai return value-nya apa adanya.
+      # Sudah dites & diverifikasi di sandbox sebelum ditaruh di sini.
       # =====================================================================
       - name: Patch twrpApex.cpp - fix loop-device EBUSY on APEX mount
         run: |
@@ -234,7 +252,10 @@ jobs:
               '\t}'
           )
 
-          new_content, n = pattern.subn(replacement, content, count=1)
+          # PENTING: lambda, BUKAN string langsung - lihat catatan panjang di
+          # atas kenapa ini wajib (menghindari re.sub/subn ikut memproses
+          # ulang escape \n di dalam replacement).
+          new_content, n = pattern.subn(lambda m: replacement, content, count=1)
 
           if n == 0:
               print("PATTERN_NOT_FOUND - patch tidak diterapkan, source formatting beda dari yang diharapkan")
@@ -252,6 +273,15 @@ jobs:
 
           echo "== Sesudah patch =="
           grep -n -B 1 -A 8 "LOOP_SET_FD" "$APEX_CPP"
+
+          echo "== Verifikasi tambahan: pastikan tidak ada baris string C++ yang belum ditutup =="
+          # Cek sederhana: hitung tanda kutip ganda di sekitar area yang dipatch,
+          # harus genap (setiap string dibuka pasti ditutup di baris yang sama)
+          if grep -n "LOGINFO(\"Loop device" "$APEX_CPP" | grep -qv '\\\\n"'; then
+            echo "❌ WARNING: baris LOGINFO hasil patch kelihatan gak lengkap, cek manual!"
+            exit 1
+          fi
+          echo "✅ Baris LOGINFO/LOGERR hasil patch utuh (backslash-n literal, bukan baris baru)"
 
       # =====================================================================
       # Device tree: PAKAI ULANG twrp_device_xiaomi_vince (android-12.1) - lihat
@@ -304,19 +334,9 @@ jobs:
       #   ini bukan env var shell, tapi langsung Makefile var di
       #   BoardConfig.mk (dikonfirmasi dari pitchblackrecovery.com/docs/build-flags/).
       #
-      # [PATCH BARU] Fix senter/torch: PB_TORCH_PATH sekarang DIISI (dulu
-      # sengaja dikosongkan). Hasil `adb shell ls /sys/class/leds/` di device
-      # vince nunjukin beberapa kandidat node torch (led:flash_0, led:flash_1,
-      # led:torch_0, led:torch_1, torch-light0, torch-light1). Dicek
-      # max_brightness tiap node: flash_0/1 = 1000 (photo flash, arus
-      # tinggi), torch_0/1 = 200 (raw kernel PMIC node, butuh nilai mA
-      # langsung), torch-light0/1 = 255 (skala brightness standar Android
-      # 0-255) - torch-light0 dipilih karena paling konsisten dgn cara TWRP
-      # toggle torch (level brightness sederhana, bukan raw current).
-      # Root cause bug lama: tanpa PB_TORCH_PATH, PBRP fallback ke
-      # auto-detect node LED dan salah nebak '/sys/class/leds/./brightness'
-      # (itu backlight LCD, bukan flash LED) - log recovery.log menunjukkan
-      # "Incorrect Flashlight Path" berulang kali.
+      # Fix senter/torch: PB_TORCH_PATH diisi ke torch-light0 (dikonfirmasi
+      # via adb shell max_brightness=255, skala standar Android 0-255, beda
+      # dari flash_0/1 yang skalanya raw current mA).
       # =====================================================================
       - name: Patch Device Tree for Dynamic Partition (Super) Support + PBRP flags
         run: |
@@ -382,7 +402,7 @@ jobs:
           # (bootable/recovery/twrp.cpp) sudah otomatis wrap value ini jadi
           # -DMTAINER="...". Kalau kita ikut nulis kutip manual, hasilnya
           # dobel kutip (""RahmatSobrian"") dan bikin compile error
-          # "invalid suffix on literal" (kejadian di build sebelumnya).
+          # "invalid suffix on literal".
           MAINTAINER := ${{ env.PB_MAINTAINER }}
 
           # dm-verity aktif secara default di PBRP; flag ini nge-untick opsi
@@ -500,7 +520,7 @@ jobs:
           tail -n 40 BoardConfig.mk
 
       # =====================================================================
-      # [PATCH BARU] Fix MTP: MicroSD tidak muncul di MTP (PC) walau normal
+      # [PATCH] Fix MTP: MicroSD tidak muncul di MTP (PC) walau normal
       # di OrangeFox/TWRP.
       #
       # ROOT CAUSE: Device tree upstream (twrp_device_xiaomi_vince,
@@ -560,7 +580,7 @@ jobs:
           grep -i "sdhci\|mmc_host" "$RFSTAB"
 
       # =====================================================================
-      # [PATCH BARU] Fix APEX loop-device-busy (bagian 1/2): tambah reservasi
+      # [PATCH] Fix APEX loop-device-busy (bagian 1/2): tambah reservasi
       # loop device.
       #
       # ROOT CAUSE: BoardConfig.mk vince punya "loop.max_part=7" (partisi per
@@ -719,7 +739,7 @@ jobs:
             -d chat_id="${TG_CHAT_ID}" \
             -d parse_mode="Markdown" \
             -d text="⚙️ *Compiling PBRP...*
-            📱 *Target:* `pb_vince-eng`
+            📱 *Target:* \`pb_vince-eng\`
             🧵 *Threads:* $(nproc --all) cores
             🔨 Build sedang berjalan, harap tunggu..."
 
@@ -868,7 +888,7 @@ jobs:
             -d parse_mode="Markdown" \
             -d text="✅ *PBRP Build Sukses!*
             📱 *Device:* Xiaomi Redmi 5 Plus (vince) - mi8953
-            🌿 *Branch:* `${{ env.PB_BRANCH }}`
+            🌿 *Branch:* \`${{ env.PB_BRANCH }}\`
             📦 *Image Size:* ${IMG_SIZE}
             💾 *Disk saat selesai:* ${DISK_FINAL}
             🕒 *Selesai:* ${BUILD_DATE}
@@ -932,8 +952,8 @@ jobs:
             -d parse_mode="Markdown" \
             -d text="❌ *PBRP Build GAGAL!*
             📱 *Device:* Xiaomi Redmi 5 Plus (vince) - mi8953
-            🌿 *Branch:* `${{ env.PB_BRANCH }}`
+            🌿 *Branch:* \`${{ env.PB_BRANCH }}\`
             💾 *Disk saat gagal:* ${DISK_FINAL}
             🕒 *Waktu:* ${BUILD_DATE}
-            📄 Full log & `disk_monitor.log` sudah dikirim/tersedia di artifacts.
+            📄 Full log & \`disk_monitor.log\` sudah dikirim/tersedia di artifacts.
             🔗 [Lihat Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"

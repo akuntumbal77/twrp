@@ -145,7 +145,13 @@ jobs:
             --prune \
             2>&1 | tee -a /tmp/full_build.log
 
-          rm -rf .repo
+          # CATATAN: TIDAK dihapus (.repo) di sini - beda dari workflow TWRP kamu.
+          # PBRP (vendor/pb/vendorsetup.sh) manggil roomservice.py yang baca
+          # .repo/manifests/default.xml saat proses "lunch" dijalankan nanti.
+          # Kalau .repo dihapus di sini, lunch bakal gagal dengan
+          # "FileNotFoundError: .repo/manifests/default.xml" (kejadian di build
+          # sebelumnya). Konsekuensinya disk kepakai lebih banyak, makanya
+          # cleanup disk di step "Free Disk Space" di awal workflow ini penting.
           df -h | tee -a /tmp/full_build.log
 
       - name: Check Disk Space (after sync)

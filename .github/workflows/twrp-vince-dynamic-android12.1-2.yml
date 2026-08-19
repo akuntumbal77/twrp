@@ -247,7 +247,11 @@ jobs:
           #
           # Flag KEDUA yang dibutuhkan: TW_INCLUDE_LIBRESETPROP := true - ini
           # yang benar-benar nge-link libresetprop ke binary recovery utama,
-          # bukan cuma nyediain resetprop sebagai tool CLI terpisah.
+          # bukan cuma nyediain resetprop sebagai tool CLI terpisah. Flag ini
+          # JUGA yang membuat binary `resetprop` CLI tersedia di /system/bin
+          # recovery - dipakai lagi nanti di merge-fstab.sh untuk fix
+          # androidboot.dynamic_partitions (lihat catatan di bagian
+          # merge-fstab.sh di bawah).
           # =====================================================================
           TW_INCLUDE_RESETPROP := true
           TW_INCLUDE_LIBRESETPROP := true
@@ -371,6 +375,31 @@ jobs:
           /metadata       ext4    /dev/block/bootdevice/by-name/logdump                   flags=display="Metadata";fsflags="discard"
           EOF
 
+          # =====================================================================
+          # [PATCH BARU] Fix: installer semacam BiTGApps (yang deteksi dynamic
+          # partition device lewat "getprop ro.boot.dynamic_partitions") salah
+          # membaca status device, karena kernel cmdline vince TIDAK PERNAH
+          # menyertakan androidboot.dynamic_partitions - baik saat ROM yang
+          # terpasang RDP maupun statis (prop ini memang tidak pernah di-set
+          # sama sekali, terlepas skema ROM-nya).
+          #
+          # KENAPA TIDAK di-hardcode statis di BOARD_KERNEL_CMDLINE:
+          # TWRP/kernel ini dipakai bergantian untuk ROM RDP dan ROM statis
+          # (non-RDP) - kernel cmdline itu SATU nilai tetap yang dibakar ke
+          # boot image, tidak bisa beda-beda tergantung ROM yang di-flash.
+          # Kalau di-hardcode true, device dengan ROM statis akan salah
+          # dilaporkan sebagai dynamic partition ke semua installer yang
+          # baca prop ini - kebalikannya juga salah kalau di-hardcode false.
+          #
+          # FIX YANG BENAR: manfaatkan deteksi RUNTIME yang SUDAH ADA di
+          # merge-fstab.sh (baris "grep -q mi8953_dynpart" di bawah) - deteksi
+          # ini AKURAT karena baca marker asli dari partition image yang
+          # benar-benar ter-flash, bukan asumsi statis. Begitu status dynpart
+          # vs nondynpart diketahui, langsung set property
+          # ro.boot.dynamic_partitions via resetprop (sudah tersedia dari
+          # TW_INCLUDE_LIBRESETPROP di atas) supaya nilainya SELALU akurat
+          # sesuai ROM yang benar-benar terpasang saat itu, bukan hardcode.
+          # =====================================================================
           echo "== Buat merge-fstab.sh (dijalankan saat init recovery, deteksi dynpart runtime) =="
           # Diadaptasi PERSIS dari device tree mi8937/msm8937 (referensi yang
           # sudah terbukti bekerja), marker diganti ke mi8953_dynpart sesuai
@@ -518,6 +547,28 @@ jobs:
               for p in cust; do
                   echo "/super_${p} emmc /dev/block/by-name/${p} flags=display=\"Super_${p}\";backup=1" >> /system/etc/twrp.flags
               done
+
+              # =================================================================
+              # [PATCH BARU] Fix androidboot.dynamic_partitions untuk installer
+              # ZIP (BiTGApps dkk) yang deteksi lewat getprop.
+              #
+              # Device TERKONFIRMASI dynamic partition (marker mi8953_dynpart
+              # ketemu) - set property lewat resetprop supaya
+              # "getprop ro.boot.dynamic_partitions" di dalam installer.sh zip
+              # apa pun yang dijalankan lewat "Install Zip" TWRP membaca "true",
+              # SESUAI kondisi ROM yang benar-benar terpasang saat ini.
+              #
+              # resetprop dipakai (bukan setprop biasa) karena ro.boot.* adalah
+              # namespace read-only property Android - setprop biasa ditolak
+              # kernel utk prefix ro.*, resetprop (dari TW_INCLUDE_LIBRESETPROP)
+              # yang bisa override read-only property ini.
+              #
+              # || true supaya kalau resetprop gagal (misal binary belum ada di
+              # titik early-init tertentu), boot recovery tetap lanjut normal -
+              # ini best-effort convenience fix, bukan sesuatu yang boleh bikin
+              # recovery gagal boot kalau tidak berhasil.
+              # =================================================================
+              resetprop ro.boot.dynamic_partitions true 2>/dev/null || true
           else
               # Non-dynamic (skema statis lama, fallback)
               cat /system/etc/twrp.flags.nondynpart >> /system/etc/twrp.flags
@@ -526,6 +577,12 @@ jobs:
               for p in cust; do
                   echo "/super_${p} emmc /dev/block/by-name/${p} flags=display=\"Super_${p}\";backup=1" >> /system/etc/twrp.flags
               done
+
+              # [PATCH BARU] Device TERKONFIRMASI statis (non-RDP) - set false
+              # secara eksplisit juga, supaya installer yang baca prop ini di
+              # skema statis dapat jawaban akurat "false", bukan kosong/undefined
+              # yang bisa diperlakukan beda-beda tergantung shell installer-nya.
+              resetprop ro.boot.dynamic_partitions false 2>/dev/null || true
           fi
           EOF
           chmod 755 recovery/root/system/bin/merge-fstab.sh
